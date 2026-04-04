@@ -1,0 +1,10 @@
+.agent-runner/
+.pytest_cache/
+.tmp-home/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.DS_Store
