@@ -1,0 +1,174 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 .SFNS-Regular;\f1\fnil\fcharset0 .SFNS-Semibold;}
+{\colortbl;\red255\green255\blue255;\red14\green14\blue14;}
+{\*\expandedcolortbl;;\cssrgb\c6700\c6700\c6700;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f0\fs28 \cf2 here\'92s a comprehensive roadmap for turning the finance dashboard into a place where you can talk to it, inspect data in context, and hand off deeper work to the full agent-runner without making the dashboard itself chaotic or dangerous.\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f1\b\fs44 \cf2 roadmap: embedded assistant drawer for finance-dashboard
+\f0\b0\fs28 \
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f1\b\fs34 \cf2 product vision
+\f0\b0\fs28 \
+\
+the finance dashboard gets a built-in assistant drawer that understands the page you\'92re on, the filters you\'92ve applied, and the data you\'92re looking at. it starts as a safe, read-oriented tool for asking questions and understanding the system. over time, it grows into a more capable operations surface and, later, a controlled bridge into deeper development workflows. the dashboard stays the operating environment. agent-runner stays the deeper build-and-run environment.\
+\
+the point is not to cram the full agent-runner into the dashboard. the point is to make the dashboard itself feel intelligent, contextual, and alive.\
+\
+
+\f1\b\fs34 guiding principles
+\f0\b0\fs28 \
+\
+the assistant should feel like part of the dashboard, not a bolted-on chatbot. it should know what page the user is on and use that context automatically. it should default to safe behavior, especially around production data. it should have clearly separated levels of capability so simple questions and riskier actions do not blur together. it should be good at short, practical interactions. and when a task becomes larger than the drawer should handle, it should escalate cleanly into the full agent-runner environment.\
+\
+
+\f1\b\fs34 three-level capability model
+\f0\b0\fs28 \
+\
+the roadmap should be built around three levels of capability.\
+\
+ask mode is the default. this is read-only and should be the first thing shipped. it answers questions, explains numbers, compares periods, inspects current page context, summarizes tables, and helps the user understand what the dashboard is showing.\
+\
+ops mode comes next. this is still controlled and mostly safe, but can do more than explain. it can run predefined reports, inspect logs, prepare exports, package analyses, and line up possible actions. it is more operational, but still should not silently mutate important production systems.\
+\
+dev mode is the highest-friction level. it is intentionally more explicit and more separated. this is where the assistant can inspect repo state, explain how a page is built, trace the origin of a metric in code, suggest a patch, or open the full agent-runner workspace. the embedded drawer should not become a casual \'93edit production\'94 surface.\
+\
+
+\f1\b\fs34 final product shape
+\f0\b0\fs28 \
+\
+the best final shape is a right-side assistant drawer inside the finance dashboard. the drawer can open from a persistent top-nav or header button and should feel available from anywhere in the app. it should show the current page context at the top, the conversation thread in the middle, and a text box with a few compact controls at the bottom. it should be narrow enough not to take over the dashboard, but deep enough to be genuinely useful.\
+\
+the assistant drawer should be able to remember conversations by page or workspace context, but it does not need to become a sprawling chat product inside the dashboard. the current page and task matter more than elaborate thread management. when the user needs a larger, deeper workspace, there should be an obvious \'93open in full agent-runner\'94 path.\
+\
+
+\f1\b\fs34 phase 1: define the product boundaries
+\f0\b0\fs28 \
+\
+before building anything, lock down the rules of the system. decide exactly what the embedded assistant is allowed to do in ask mode, what belongs in ops mode, and what should be reserved for full agent-runner. decide whether the drawer is tied to the user session, the current page, or a broader workspace. decide whether conversations are ephemeral per page or persist across sessions. decide how much context is automatically passed from the dashboard into the assistant. and most importantly, decide what the assistant is absolutely not allowed to touch in v1.\
+\
+the output of this phase should be a simple product contract: what the embedded assistant is for, what it is not for, and what safety boundaries are non-negotiable.\
+\
+
+\f1\b\fs34 phase 2: build the shared service contract
+\f0\b0\fs28 \
+\
+the assistant drawer should not become its own special backend world. it should sit on top of the same service logic that powers agent-runner\'92s browser-first architecture. that means the core conversation service, run supervision, and context assembly should already exist or be formalized before the drawer gets too smart.\
+\
+at this layer, define how the dashboard will talk to the assistant system. it needs a way to open or create a conversation, send a message, receive an answer, request analysis in a certain mode, and fetch the current state of the conversation. it also needs a structured way to pass page context into the assistant. that page context might include route, selected record, active filters, visible table columns, date windows, and any currently loaded identifiers that matter.\
+\
+the output of this phase should be a clear service boundary: the dashboard sends page-aware context and messages; the assistant service returns messages, analyses, and structured results.\
+\
+
+\f1\b\fs34 phase 3: page-aware context model
+\f0\b0\fs28 \
+\
+this is one of the most important phases. the assistant becomes valuable when it knows where it is. each major dashboard view should have a context adapter that describes what matters on that page. on an inventory page, that might include current sku, warehouse, sell-through window, and stock figures. on a cash flow page, it might include selected account, date range, category filters, and currently displayed metrics. on a payout or finance detail page, it might include relevant entities and any currently visible anomalies.\
+\
+this context should be assembled in a structured way, not as a sloppy blob of UI text. the assistant should receive a clean page context object that it can use as part of its reasoning. that way the user can ask short, natural questions without repeatedly restating what is already visible.\
+\
+the output of this phase should be a repeatable context system for each important dashboard surface, with a consistent structure the assistant can rely on.\
+\
+
+\f1\b\fs34 phase 4: ship ask mode
+\f0\b0\fs28 \
+\
+ask mode should be the first public-facing milestone. this is the safe, high-value version. the user opens the drawer, sees the current page context, and can ask questions like why a metric changed, what date range is active, what is driving a chart, or whether a number matches another report. the assistant should be able to answer from a combination of page context, schema knowledge, and read-only queries against the database.\
+\
+this phase should emphasize trust. the assistant should explain its reasoning clearly enough to be useful without drowning the user in internals. it should not over-promise. if it uses a query or inference, it should make that understandable. and it should stay fast and light enough that the drawer feels like a natural extension of the dashboard instead of a side project hidden inside it.\
+\
+the output of this phase should be a genuinely useful read-only assistant that helps the user understand data and app behavior while staying safely within bounds.\
+\
+
+\f1\b\fs34 phase 5: database intelligence layer
+\f0\b0\fs28 \
+\
+once ask mode works, deepen the assistant\'92s understanding of the finance database. this means building a schema-aware layer that knows the important tables, joins, metric definitions, and reporting conventions. the assistant should be able to answer questions like where a figure came from, which table drives a card, what logic defines a time series, or whether two views are using the same source of truth.\
+\
+this is where a lot of the practical magic lives. instead of just being a page-aware chatbot, it becomes a real analytical tool. but the default posture should still be read-only against production. it can inspect, explain, compare, and draft. it should not casually write.\
+\
+the output of this phase should be a schema-aware analytical assistant that can query and explain the underlying finance system in a trustworthy way.\
+\
+
+\f1\b\fs34 phase 6: add ops mode
+\f0\b0\fs28 \
+\
+after ask mode is stable, add ops mode. this is for actions that are helpful and operational without being reckless. the assistant can run a saved report, package a period comparison, prepare an export, inspect a log, summarize anomalies, or gather relevant artifacts for follow-up. ops mode should still feel controlled and reversible. it should prepare or trigger bounded workflows, not wander freely.\
+\
+the UI needs to make this escalation clear. ask mode should feel like \'93understand.\'94 ops mode should feel like \'93prepare or execute a known operational workflow.\'94 this distinction matters because it teaches the user what kind of system they are interacting with.\
+\
+the output of this phase should be a more powerful assistant that can move from explanation into operational help without breaking trust.\
+\
+
+\f1\b\fs34 phase 7: add dev bridge, not full dev surface
+\f0\b0\fs28 \
+\
+the next step is not \'93turn the dashboard into codex.\'94 the next step is a bridge into deeper workflows. the assistant should be able to inspect page implementation, explain which files shape a view, trace a metric to code, draft a possible fix, and then open the full task in agent-runner. it may also be able to generate a handoff, summarize a bug, or create a structured prompt for deeper work.\
+\
+this is the right place for dev mode. dev mode should feel different. it should be clearly marked and perhaps require an explicit switch or confirmation. the embedded drawer can help you think, inspect, and hand off. but full repo editing and deeper build loops should happen in agent-runner proper.\
+\
+the output of this phase should be a strong handoff pathway from dashboard context into full build-and-run workflows.\
+\
+
+\f1\b\fs34 phase 8: conversation and memory strategy
+\f0\b0\fs28 \
+\
+once the drawer is genuinely useful, decide how conversation persistence should work. the simplest version is a short per-page conversation that survives page transitions and maybe session reloads. a richer version lets the assistant remember ongoing threads tied to specific dashboard areas. the best middle ground is probably per-workspace or per-page conversation continuity with lightweight persistence and the ability to clear context when needed.\
+\
+it should be easy to start fresh. the user should not feel trapped in a bloated thread. context management matters even more in an embedded environment because the interactions are often short and practical.\
+\
+the output of this phase should be a conversation model that preserves usefulness without turning the drawer into a cluttered mini chat platform.\
+\
+
+\f1\b\fs34 phase 9: safety, permissions, and guardrails
+\f0\b0\fs28 \
+\
+before giving the embedded assistant any operational teeth, build safety deliberately. define which tools are available in each mode. define whether read-only production access is always enforced in ask mode. define which actions require confirmation. define what logs or traces are kept for debugging and trust. define whether certain workflows are disabled outside dev environments. define how the system handles ambiguous or risky user instructions.\
+\
+this phase matters because the embedded assistant will feel convenient, and convenient things are where people make mistakes. the more natural it feels, the more important the boundaries become.\
+\
+the output of this phase should be a permission model that matches the three-level capability design and makes misuse hard.\
+\
+
+\f1\b\fs34 phase 10: UI refinement
+\f0\b0\fs28 \
+\
+once the functionality exists, polish the drawer so it feels native to the dashboard. the current page context should be visible but not noisy. the thread should be readable. the composer should feel dependable. status and mode should be obvious. any structured results, such as query findings or report summaries, should render cleanly. the drawer should work well at laptop widths and still feel usable on narrower layouts.\
+\
+the UI should emphasize clarity over spectacle. the most important feeling is that the dashboard now has a calm, built-in brain.\
+\
+the output of this phase should be a drawer that people actually enjoy using while they work.\
+\
+
+\f1\b\fs34 phase 11: instrumentation and learning loop
+\f0\b0\fs28 \
+\
+after rollout, instrument how the assistant is being used. learn what questions users ask most often, which pages benefit most from contextual help, where the assistant answers well, where it confuses people, and where it causes hesitation. identify which ops workflows are most requested. identify when users hand off to full agent-runner and what triggers that escalation.\
+\
+this learning loop will tell you whether the assistant is mainly an analytical tool, an operational copilot, or a bridge into development. it will also tell you what to automate next.\
+\
+the output of this phase should be a grounded understanding of real usage, not just theoretical product ideas.\
+\
+
+\f1\b\fs34 recommended delivery sequence
+\f0\b0\fs28 \
+\
+the cleanest sequence is to first define the boundary and service contract, then build page-aware context, then ship ask mode, then deepen database intelligence, then add ops mode, then build the dev bridge, then refine persistence and safety, and only after that polish the UI and expand. that order keeps the system useful and safe from the beginning.\
+\
+
+\f1\b\fs34 success criteria
+\f0\b0\fs28 \
+\
+this roadmap is working when the finance dashboard feels smarter without feeling riskier. a user should be able to open the drawer, ask a short question about the current page, get a useful answer grounded in real context, inspect where numbers came from, compare periods or entities, and move into deeper work only when needed. the system should save time, reduce context switching, and help with understanding and operations before it tries to be a full development environment.\
+\
+
+\f1\b\fs34 blunt recommendation
+\f0\b0\fs28 \
+\
+start with the smallest version that already feels magical: a right-side assistant drawer, page-aware context, read-only finance-db intelligence, and a clean path to open full agent-runner for anything bigger. that alone is a very strong product. after that, grow carefully. the big win is not \'93AI inside the dashboard.\'94 the big win is \'93the dashboard can finally talk back in a way that understands itself.\'94}

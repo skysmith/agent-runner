@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .models import ConversationMessage, ConversationRecord, WorkspaceSessionState
+from .models import AssistantCapabilityMode, ConversationMessage, ConversationRecord, WorkspaceSessionState
 
 DEFAULT_CONVERSATION_TITLE = "New conversation"
 
@@ -32,6 +32,8 @@ class ConversationStore:
             active_conversation_id=_optional_text(raw.get("active_conversation_id")),
             conversation_ids=_as_string_list(raw.get("conversation_ids")),
             conversations_panel_collapsed=bool(raw.get("conversations_panel_collapsed", False)),
+            display_name=_optional_text(raw.get("display_name")),
+            repo_path=_optional_text(raw.get("repo_path")),
         )
 
     def save_workspace_state(self, state: WorkspaceSessionState) -> None:
@@ -40,6 +42,8 @@ class ConversationStore:
             "active_conversation_id": state.active_conversation_id,
             "conversation_ids": list(state.conversation_ids),
             "conversations_panel_collapsed": state.conversations_panel_collapsed,
+            "display_name": state.display_name,
+            "repo_path": state.repo_path,
         })
 
     def list_conversations(self, workspace_id: str) -> list[ConversationRecord]:
@@ -84,6 +88,8 @@ class ConversationStore:
             title=title,
             created_at=now,
             updated_at=now,
+            assistant_mode=AssistantCapabilityMode.ASK,
+            page_context={},
             summary=None,
             messages=[],
         )
@@ -118,7 +124,7 @@ class ConversationStore:
 
     def _atomic_write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path = path.with_suffix(path.suffix + f".{uuid4().hex}.tmp")
         tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp_path, path)
 
@@ -136,6 +142,13 @@ class WorkspaceConversationController:
     def metadata(self) -> list[ConversationRecord]:
         return [self._records[cid] for cid in self.state.conversation_ids if cid in self._records]
 
+    def reload(self) -> None:
+        self.state = self.store.ensure_workspace(self.workspace_id)
+        self._records = {
+            record.id: record for record in self.store.list_conversations(self.workspace_id)
+        }
+        self._normalize_after_load()
+
     def active_conversation(self) -> ConversationRecord:
         active_id = self.state.active_conversation_id
         if active_id and active_id in self._records:
@@ -148,6 +161,21 @@ class WorkspaceConversationController:
             return
         self.state.conversations_panel_collapsed = collapsed
         self.store.save_workspace_state(self.state)
+
+    def set_workspace_profile(
+        self,
+        *,
+        display_name: str | None = None,
+        repo_path: str | None = None,
+    ) -> WorkspaceSessionState:
+        clean_name = (display_name or "").strip() or None
+        clean_repo_path = (repo_path or "").strip() or None
+        if self.state.display_name == clean_name and self.state.repo_path == clean_repo_path:
+            return self.state
+        self.state.display_name = clean_name
+        self.state.repo_path = clean_repo_path
+        self.store.save_workspace_state(self.state)
+        return self.state
 
     def create_conversation(self) -> ConversationRecord:
         record = self.store.create_conversation(self.workspace_id)
@@ -190,6 +218,38 @@ class WorkspaceConversationController:
             self.state.active_conversation_id = self.state.conversation_ids[0]
         self.store.save_workspace_state(self.state)
         return self.active_conversation()
+
+    def clear_conversation(self, conversation_id: str) -> ConversationRecord:
+        if conversation_id not in self._records:
+            raise KeyError(conversation_id)
+        record = self._records[conversation_id]
+        record.messages = []
+        record.summary = None
+        record.updated_at = _timestamp_now()
+        self._save_record(record)
+        return record
+
+    def set_assistant_context(
+        self,
+        conversation_id: str,
+        *,
+        assistant_mode: AssistantCapabilityMode | None = None,
+        page_context: dict[str, object] | None = None,
+    ) -> ConversationRecord:
+        if conversation_id not in self._records:
+            raise KeyError(conversation_id)
+        record = self._records[conversation_id]
+        changed = False
+        if assistant_mode is not None and record.assistant_mode != assistant_mode:
+            record.assistant_mode = assistant_mode
+            changed = True
+        if page_context is not None and record.page_context != page_context:
+            record.page_context = dict(page_context)
+            changed = True
+        if changed:
+            record.updated_at = _timestamp_now()
+            self._save_record(record)
+        return record
 
     def append_message(
         self,
@@ -314,6 +374,8 @@ def _conversation_from_json(raw: dict[str, Any], *, conversation_id: str, worksp
         title=str(raw.get("title") or DEFAULT_CONVERSATION_TITLE),
         created_at=str(raw.get("created_at") or _timestamp_now()),
         updated_at=str(raw.get("updated_at") or _timestamp_now()),
+        assistant_mode=_assistant_mode_from_raw(raw.get("assistant_mode")),
+        page_context=_object_dict(raw.get("page_context")),
         summary=_optional_text(raw.get("summary")),
         messages=messages,
     )
@@ -335,6 +397,21 @@ def _as_string_list(value: object) -> list[str]:
         if text:
             out.append(text)
     return out
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _assistant_mode_from_raw(value: object) -> AssistantCapabilityMode:
+    if value is None:
+        return AssistantCapabilityMode.ASK
+    try:
+        return AssistantCapabilityMode(str(value).strip().lower())
+    except ValueError:
+        return AssistantCapabilityMode.ASK
 
 
 def _sorted_conversation_ids(records: list[ConversationRecord]) -> list[str]:

@@ -5,12 +5,16 @@ import os
 import subprocess
 import queue
 import re
+import socket
+import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from tkinter import (
     BooleanVar,
     Canvas,
@@ -35,6 +39,7 @@ from .preflight import generate_clarifying_questions
 from .providers import ExecutionRequest, ProviderRouter, probe_ollama
 from .run_coordinator import RunCoordinator
 from .runner import AgentRunner, RunnerConfig
+from .service import AgentRunnerService, ServiceConfig
 from .settings_store import load_app_settings, save_app_settings
 from .update_signal import CommitUpdateSignal, read_build_label
 from .voice import VoiceError, VoiceRecordingSession, start_recording, stop_recording, transcribe_audio
@@ -87,6 +92,9 @@ class WorkspacePane:
         self.animation_frame_index = 0
         self.animation_after_id: str | None = None
         self.status_tooltip: Toplevel | None = None
+        self.last_store_refresh = 0.0
+        self._suppress_conversation_select = False
+        self.rendered_thread_signature: tuple[str, str, str, int] | None = None
 
         self.state_var = StringVar(value=STATE_IDLE)
         self.step_var = StringVar(value="Not started")
@@ -216,8 +224,13 @@ class WorkspacePane:
         ttk.Label(changes, text="THREAD", style="SectionEyebrow.TLabel").pack(anchor="w")
         self.conversation_title_label = ttk.Label(changes, textvariable=self.thread_title_var, style="SectionTitle.TLabel")
         self.conversation_title_label.pack(anchor="w", pady=(2, 8))
+        thread_shell = ttk.Frame(changes, style="Surface.TFrame")
+        thread_shell.pack(fill="both", expand=True)
+        thread_shell.columnconfigure(0, weight=1)
+        thread_shell.rowconfigure(0, weight=1)
+
         self.change_list = Text(
-            changes,
+            thread_shell,
             height=22,
             wrap="word",
             relief="flat",
@@ -230,12 +243,14 @@ class WorkspacePane:
             pady=10,
             state="disabled",
         )
-        self.change_list.pack(fill="both", expand=True)
+        self.change_list.grid(row=0, column=0, sticky="nsew")
+        thread_scroll = ttk.Scrollbar(thread_shell, orient="vertical", command=self.change_list.yview)
+        thread_scroll.grid(row=0, column=1, sticky="ns")
+        self.change_list.configure(yscrollcommand=thread_scroll.set)
+        self._bind_thread_scroll(self.change_list)
 
         prompt_section = ttk.Frame(column, style="Surface.TFrame", padding=(16, 14, 16, 14))
         prompt_section.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Label(prompt_section, text="YOUR REQUEST", style="SectionEyebrow.TLabel").pack(anchor="w")
-        ttk.Label(prompt_section, text="What should happen next?", style="SectionTitle.TLabel").pack(anchor="w", pady=(2, 8))
 
         composer_shell = ttk.Frame(prompt_section, style="ComposerShell.TFrame", padding=1)
         composer_shell.pack(fill="x")
@@ -261,7 +276,7 @@ class WorkspacePane:
         initial_prompt = prompt_text if prompt_text else "Describe what you want in plain language."
         self.prompt_input.insert("1.0", initial_prompt)
         self.prompt_input.bind("<FocusIn>", self._clear_placeholder)
-        self.prompt_input.bind("<Return>", self._run_from_shortcut)
+        self.prompt_input.bind("<Return>", self._insert_newline_from_shortcut)
         self.prompt_input.bind("<Shift-Return>", self._insert_newline_from_shortcut)
         self.prompt_input.bind("<Command-Return>", self._run_from_shortcut)
         self.prompt_input.bind("<Control-Return>", self._run_from_shortcut)
@@ -330,7 +345,10 @@ class WorkspacePane:
             self.prompt_input.delete("1.0", "end")
 
     def _run_from_shortcut(self, _: object) -> str:
-        self.start_run()
+        # Defer startup until Tk finishes processing the current key event.
+        # Running the full launch path directly inside the Text <Return> handler
+        # can leave the UI feeling stuck on macOS.
+        self.frame.after_idle(self.start_run)
         return "break"
 
     def _insert_newline_from_shortcut(self, _: object) -> str:
@@ -345,15 +363,11 @@ class WorkspacePane:
             self._set_error("Please type a request before running.")
             return
         prompt = raw_prompt
-        provider, model, _, run_mode = self._effective_run_settings()
+        provider, model, loop_count, run_mode = self._effective_run_settings()
         if run_mode == RunMode.LOOP and self.app.app_settings.preflight_clarifications:
             prompt = self._prepare_prompt_with_clarifications(prompt=prompt, provider=provider, model=model)
             if not prompt:
                 return
-        if not self.app.coordinator.try_start(self.workspace_id):
-            self._set_error("Another workspace is running. Please wait for it to finish.")
-            return
-
         self.is_running = True
         self.stop_requested = False
         self._set_state(STATE_RUNNING)
@@ -365,37 +379,38 @@ class WorkspacePane:
         self._set_conversation_controls_enabled(False)
         self._start_animation()
         self.prompt_input.delete("1.0", "end")
-        record = self.controller.append_message(role="user", content=raw_prompt)
-        self._maybe_refresh_conversation_summary(record.id)
         active_conversation = self.controller.active_conversation()
-        effective_context = (
-            self.app.context_assembler.build_for_loop(
-                repo_path=self.app.bootstrap.repo_path,
-                provider=provider,
-                model=model,
-                run_mode=run_mode,
-                conversation=active_conversation,
-                current_input=prompt,
-            )
-            if run_mode == RunMode.LOOP
-            else self.app.context_assembler.build_for_message(
-                repo_path=self.app.bootstrap.repo_path,
-                provider=provider,
-                model=model,
-                run_mode=run_mode,
-                conversation=active_conversation,
-                current_input=prompt,
-            )
-        )
-        self._refresh_conversation_list(selected_id=active_conversation.id)
-        self._render_active_conversation()
-
-        thread = threading.Thread(
-            target=self._run_in_background,
-            args=(prompt, active_conversation.id, effective_context),
+        threading.Thread(
+            target=self._dispatch_run_request,
+            args=(active_conversation.id, raw_prompt, prompt, provider, model, loop_count, run_mode),
             daemon=True,
-        )
-        thread.start()
+        ).start()
+
+    def _dispatch_run_request(
+        self,
+        conversation_id: str,
+        raw_prompt: str,
+        prompt: str,
+        provider: ProviderKind,
+        model: str,
+        loop_count: int,
+        run_mode: RunMode,
+    ) -> None:
+        try:
+            self.app.service.send_message(
+                workspace_id=self.workspace_id,
+                conversation_id=conversation_id,
+                content=prompt,
+                mode=run_mode,
+                provider=provider,
+                model=model,
+                max_step_retries=max(0, loop_count - 1),
+                event_callback=lambda event_type, payload: self.events.put((event_type, payload)),
+            )
+        except RuntimeError as exc:
+            self.events.put(("dispatch_error", {"message": str(exc), "prompt": raw_prompt}))
+            return
+        self.events.put(("dispatch_started", {"conversation_id": conversation_id}))
 
     def _effective_run_settings(self) -> tuple[ProviderKind, str, int, RunMode]:
         global_settings = self.app.app_settings
@@ -471,6 +486,7 @@ class WorkspacePane:
         if not self.is_running:
             return
         self.stop_requested = True
+        self.app.service.stop_run()
         self._set_error("Stopping safely after the current phase.")
         self.step_var.set("Stopping safely")
         self.stop_button.state(["disabled"])
@@ -690,6 +706,10 @@ class WorkspacePane:
                 elif event_type == "message_done":
                     self._consume_message_done(payload)
                     self.app.finish_workspace_run(self.workspace_id)
+                elif event_type == "dispatch_started":
+                    self._consume_dispatch_started(payload)
+                elif event_type == "dispatch_error":
+                    self._consume_dispatch_error(payload)
                 elif event_type == "transcript_ready":
                     self._consume_transcript_ready(str(payload))
                 elif event_type == "transcript_error":
@@ -697,7 +717,6 @@ class WorkspacePane:
                 elif event_type == "error":
                     self._set_state(STATE_ERROR)
                     self._set_error(str(payload))
-                    self._append_assistant_message(text=f"Run failed.\n\nReason: {payload}", phase="error")
                     self.is_running = False
                     self.run_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
@@ -706,8 +725,31 @@ class WorkspacePane:
                     self.app.finish_workspace_run(self.workspace_id)
         except queue.Empty:
             pass
+        self._refresh_from_store_if_needed()
         self._refresh_status_labels()
         self.frame.after(80, self._drain_events)
+
+    def _consume_dispatch_started(self, payload: object) -> None:
+        data = dict(payload) if isinstance(payload, dict) else {}
+        conversation_id = str(data.get("conversation_id") or self.controller.active_conversation().id)
+        self.controller.reload()
+        self._refresh_conversation_list(selected_id=conversation_id)
+        self._render_active_conversation()
+
+    def _consume_dispatch_error(self, payload: object) -> None:
+        data = dict(payload) if isinstance(payload, dict) else {}
+        message = str(data.get("message", "Unable to start the run.")).strip()
+        prompt = str(data.get("prompt", "")).strip()
+        self.is_running = False
+        self.run_button.state(["!disabled"])
+        self.stop_button.state(["disabled"])
+        self._stop_animation("error")
+        self._set_conversation_controls_enabled(True)
+        self._set_error(message)
+        if prompt:
+            current = self.prompt_input.get("1.0", "end").strip()
+            if not current:
+                self.prompt_input.insert("1.0", prompt)
 
     def _consume_status(self, message: str) -> None:
         if "Phase: planner" in message:
@@ -751,11 +793,9 @@ class WorkspacePane:
         if outcome is None:
             self._set_state(STATE_ERROR)
             self._set_error("Runner finished without outcome.")
-            self._append_assistant_message(
-                text="Run failed.\n\nNo outcome was returned.",
-                phase="loop-final",
-                conversation_id=conversation_id,
-            )
+            self.controller.reload()
+            self._refresh_conversation_list(selected_id=conversation_id)
+            self._render_active_conversation()
             return
 
         check_results = []
@@ -798,11 +838,9 @@ class WorkspacePane:
             change_lines = ["Run finished with no reported changes."]
         if isinstance(build_number, int):
             change_lines.insert(0, f"Build number: {build_number}")
-        self._append_assistant_message(
-            text="\n".join(change_lines),
-            phase="loop-final",
-            conversation_id=conversation_id,
-        )
+        self.controller.reload()
+        self._refresh_conversation_list(selected_id=conversation_id)
+        self._render_active_conversation()
 
     def _consume_message_done(self, payload: object) -> None:
         data = dict(payload) if isinstance(payload, dict) else {}
@@ -819,10 +857,9 @@ class WorkspacePane:
         self._set_error("")
         self.checks_var.set("Skipped (message mode)")
         self.artifacts_var.set("Message mode (no loop artifacts)")
-        text = "Message response received."
-        if response:
-            text = f"{text}\n\n{response}"
-        self._append_assistant_message(text=text, phase="message", conversation_id=conversation_id)
+        self.controller.reload()
+        self._refresh_conversation_list(selected_id=conversation_id)
+        self._render_active_conversation()
 
     def _consume_transcript_ready(self, transcript: str) -> None:
         self._set_error("")
@@ -893,10 +930,14 @@ class WorkspacePane:
         self._render_active_conversation()
 
     def _append_conversation_message(self, *, from_user: bool, text: str) -> None:
+        self.change_list.configure(state="normal")
+        self._append_conversation_message_batch(from_user=from_user, text=text, autoscroll=True)
+        self.change_list.configure(state="disabled")
+
+    def _append_conversation_message_batch(self, *, from_user: bool, text: str, autoscroll: bool) -> None:
         clean_text = text.strip()
         if not clean_text:
             return
-        self.change_list.configure(state="normal")
         if self.conversation_initialized:
             self.change_list.insert("end", "\n")
         bubble_bg = "#3f644b" if from_user else "#ecebe5"
@@ -919,30 +960,51 @@ class WorkspacePane:
             bubble.pack(side="right", padx=(96, 10))
         else:
             bubble.pack(side="left", padx=(10, 96))
+        self._bind_thread_scroll(row)
+        self._bind_thread_scroll(bubble)
         self.change_list.window_create("end", window=row, stretch=1)
         self.change_list.insert("end", "\n")
-        self.change_list.see("end")
+        if autoscroll:
+            self.change_list.see("end")
         self.conversation_initialized = True
-        self.change_list.configure(state="disabled")
 
     def _clear_thread(self) -> None:
         self.change_list.configure(state="normal")
         self.change_list.delete("1.0", "end")
         self.change_list.configure(state="disabled")
         self.conversation_initialized = False
+        self.rendered_thread_signature = None
 
-    def _render_active_conversation(self) -> None:
+    def _render_active_conversation(self, *, force: bool = False) -> None:
         record = self.controller.active_conversation()
+        signature = (record.id, record.title, record.updated_at, len(record.messages))
+        if not force and self.rendered_thread_signature == signature:
+            return
         self.thread_title_var.set(record.title)
-        self._clear_thread()
+        top_fraction, bottom_fraction = self.change_list.yview()
+        preserve_position = self.conversation_initialized and bottom_fraction < 0.98
+        self.change_list.configure(state="normal")
+        self.change_list.delete("1.0", "end")
+        self.conversation_initialized = False
         if not record.messages:
-            self._append_conversation_message(
+            self._append_conversation_message_batch(
                 from_user=False,
                 text="No messages yet. Type your request below to start this conversation.",
+                autoscroll=not preserve_position,
             )
-            return
-        for message in record.messages:
-            self._append_conversation_message(from_user=message.role == "user", text=message.content)
+        else:
+            for message in record.messages:
+                self._append_conversation_message_batch(
+                    from_user=message.role == "user",
+                    text=message.content,
+                    autoscroll=not preserve_position,
+                )
+        self.change_list.configure(state="disabled")
+        self.rendered_thread_signature = signature
+        if preserve_position:
+            self.change_list.yview_moveto(top_fraction)
+        else:
+            self.change_list.see("end")
 
     def _refresh_conversation_list(self, selected_id: str | None = None) -> None:
         active_id = selected_id or self.controller.state.active_conversation_id
@@ -959,8 +1021,15 @@ class WorkspacePane:
                 self.conversation_tree.insert("", "end", iid=record.id, text=label)
             self.conversation_tree.move(record.id, "", index)
         if active_id and active_id in desired_ids:
-            self.conversation_tree.selection_set(active_id)
-            self.conversation_tree.focus(active_id)
+            current_selection = self._selected_conversation_id()
+            current_focus = self.conversation_tree.focus()
+            if current_selection != active_id or current_focus != active_id:
+                self._suppress_conversation_select = True
+                try:
+                    self.conversation_tree.selection_set(active_id)
+                    self.conversation_tree.focus(active_id)
+                finally:
+                    self._suppress_conversation_select = False
 
     def _conversation_row_label(self, record) -> str:
         try:
@@ -970,6 +1039,8 @@ class WorkspacePane:
         return f"{record.title}  ·  {stamp}"
 
     def _handle_conversation_selected(self, _: object) -> None:
+        if self._suppress_conversation_select:
+            return
         selected_id = self._selected_conversation_id()
         if not selected_id:
             return
@@ -1057,6 +1128,12 @@ class WorkspacePane:
             self.controller.update_summary(conversation_id, summary)
 
     def _refresh_status_labels(self) -> None:
+        run_status = self.app.service.get_run_status()
+        if str(run_status.get("state", "idle")) == "running":
+            self.state_var.set(STATE_RUNNING)
+            self.step_var.set(str(run_status.get("step", "Working")))
+        elif self.state_var.get() == STATE_RUNNING and not self.is_running:
+            self.state_var.set(STATE_IDLE)
         state = self.state_var.get()
         dot = self.status_dot
         dot.delete("all")
@@ -1080,6 +1157,60 @@ class WorkspacePane:
         if error_text:
             details.append(f"Note: {error_text}")
         self.status_tooltip_var.set("\n".join(details))
+
+    def _refresh_from_store_if_needed(self) -> None:
+        now = time.monotonic()
+        if now - self.last_store_refresh < 1.5:
+            return
+        self.last_store_refresh = now
+        current_id = self.controller.state.active_conversation_id
+        previous_record = self.controller.active_conversation()
+        previous_signature = (
+            previous_record.id,
+            previous_record.title,
+            previous_record.updated_at,
+            len(previous_record.messages),
+        )
+        self.controller.reload()
+        new_record = self.controller.active_conversation()
+        new_signature = (
+            new_record.id,
+            new_record.title,
+            new_record.updated_at,
+            len(new_record.messages),
+        )
+        self._refresh_conversation_list(selected_id=self.controller.state.active_conversation_id)
+        if self.controller.state.active_conversation_id != current_id or new_signature != previous_signature:
+            self._render_active_conversation(force=True)
+
+    def _bind_thread_scroll(self, widget: Text | Frame | Label) -> None:
+        widget.bind("<MouseWheel>", self._handle_thread_mousewheel)
+        widget.bind("<Shift-MouseWheel>", self._handle_thread_shift_mousewheel)
+        widget.bind("<Button-4>", self._handle_thread_mousewheel)
+        widget.bind("<Button-5>", self._handle_thread_mousewheel)
+
+    def _handle_thread_mousewheel(self, event: object) -> str:
+        delta = getattr(event, "delta", 0)
+        num = getattr(event, "num", None)
+        if num == 4:
+            self.change_list.yview_scroll(-3, "units")
+            return "break"
+        if num == 5:
+            self.change_list.yview_scroll(3, "units")
+            return "break"
+        if delta == 0:
+            return "break"
+        steps = 1
+        if sys.platform == "darwin":
+            steps = max(1, int(abs(delta) / 2))
+        elif abs(delta) >= 120:
+            steps = max(1, int(abs(delta) / 120))
+        direction = -1 if delta > 0 else 1
+        self.change_list.yview_scroll(direction * steps, "units")
+        return "break"
+
+    def _handle_thread_shift_mousewheel(self, event: object) -> str:
+        return self._handle_thread_mousewheel(event)
 
     def _state_color(self, state: str) -> str:
         if state == STATE_DONE:
@@ -1197,6 +1328,7 @@ class WindowController:
         if is_macos:
             app_menu = Menu(menubar, name="apple", tearoff=0)
             app_menu.add_command(label="About agent-runner", command=self.app.show_about_dialog)
+            app_menu.add_command(label="Open Companion UI", command=lambda: self.app.open_companion_ui(parent=self.root))
             app_menu.add_separator()
             app_menu.add_command(label="Safe Reload", command=lambda: self.app.trigger_safe_reload(parent=self.root))
             menubar.add_cascade(menu=app_menu)
@@ -1217,6 +1349,13 @@ class WindowController:
         workspace_menu.add_command(label="Workspace Options...", command=self.edit_active_workspace_settings)
         workspace_menu.add_command(label="Open Tab In New Window", command=self.popout_active_tab)
         menubar.add_cascade(label="Workspace", menu=workspace_menu)
+
+        companion_menu = Menu(menubar, tearoff=0)
+        companion_menu.add_command(label="Launch Companion Server", command=lambda: self.app.launch_companion_server(parent=self.root))
+        companion_menu.add_command(label="Open Companion UI", command=lambda: self.app.open_companion_ui(parent=self.root))
+        companion_menu.add_command(label="Show Companion URL", command=lambda: self.app.show_companion_url(parent=self.root))
+        companion_menu.add_command(label="Open Tailscale URL", command=lambda: self.app.open_companion_tailscale_url(parent=self.root))
+        menubar.add_cascade(label="Companion", menu=companion_menu)
 
         settings_menu = Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Preferences...", command=self.app.open_settings_window)
@@ -1333,7 +1472,7 @@ class WorkspaceApp:
     def __init__(self, root: Tk, bootstrap: UiSettings):
         self.root = root
         self.bootstrap = bootstrap
-        self.coordinator = RunCoordinator()
+        self.coordinator = RunCoordinator(bootstrap.settings_path.parent)
         self.phase_client = ProviderRouter()
         self.windows: list[WindowController] = []
         self.workspace_counter = 0
@@ -1353,16 +1492,41 @@ class WorkspaceApp:
             default_checks=list(bootstrap.check_commands),
         )
         self.app_settings = load_app_settings(self.settings_path, defaults)
+        self.service = AgentRunnerService(
+            ServiceConfig(
+                repo_path=bootstrap.repo_path,
+                artifacts_dir=bootstrap.artifacts_dir,
+                settings_path=bootstrap.settings_path,
+                provider=bootstrap.provider,
+                codex_bin=bootstrap.codex_bin,
+                model=bootstrap.model,
+                ollama_host=bootstrap.ollama_host,
+                extra_access_dir=bootstrap.extra_access_dir,
+                max_step_retries=bootstrap.max_step_retries,
+                phase_timeout_seconds=bootstrap.phase_timeout_seconds,
+                check_commands=list(bootstrap.check_commands),
+                dry_run=bootstrap.dry_run,
+            ),
+            phase_client=self.phase_client,
+            context_assembler=self.context_assembler,
+            coordinator=self.coordinator,
+        )
         self.ollama_status = "Unknown"
         self.ollama_models: list[str] = []
         self.settings_window: Toplevel | None = None
         self.update_signal = CommitUpdateSignal(repo_path=bootstrap.repo_path)
         self.update_available = False
         self.reload_queued = False
+        self.companion_host = os.environ.get("AGENT_RUNNER_COMPANION_HOST", "0.0.0.0").strip() or "0.0.0.0"
+        self.companion_port = int(os.environ.get("AGENT_RUNNER_COMPANION_PORT", "8765"))
+        self.companion_server = None
+        self.companion_server_thread: threading.Thread | None = None
+        self.tailscale_info = self._load_tailscale_info()
 
         self._configure_style()
         self._refresh_ollama()
         self.create_window(root=root)
+        self.root.after(50, self._ensure_companion_server_started)
         self._schedule_update_poll()
 
     def iter_workspaces(self) -> list[WorkspacePane]:
@@ -1545,6 +1709,173 @@ class WorkspaceApp:
             f"agent-runner\n\n{build_label}",
             parent=self.root,
         )
+
+    def launch_companion_server(
+        self,
+        parent: Tk | Toplevel | None = None,
+        *,
+        open_browser: bool = True,
+    ) -> None:
+        parent = parent or self.root
+        if self._companion_is_running():
+            if open_browser:
+                self.open_companion_ui(parent=parent)
+            return
+        try:
+            from .http_api import create_server
+        except Exception as exc:
+            messagebox.showerror("agent-runner", f"Could not load companion server: {exc}", parent=parent)
+            return
+
+        try:
+            self.companion_server = create_server(self.service, self.companion_host, self.companion_port)
+        except OSError as exc:
+            messagebox.showerror("agent-runner", f"Could not start companion server: {exc}", parent=parent)
+            return
+        self.companion_server_thread = threading.Thread(target=self.companion_server.serve_forever, daemon=True)
+        self.companion_server_thread.start()
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self._companion_is_running():
+                break
+            time.sleep(0.05)
+        if not self._companion_is_running():
+            messagebox.showwarning(
+                "agent-runner",
+                f"Companion server is still starting on {self._companion_display_host()}:{self.companion_port}.",
+                parent=parent,
+            )
+            return
+        if open_browser:
+            self.open_companion_ui(parent=parent)
+
+    def open_companion_ui(self, parent: Tk | Toplevel | None = None) -> None:
+        parent = parent or self.root
+        if not self._companion_is_running():
+            self.launch_companion_server(parent=parent)
+            return
+        webbrowser.open(self._companion_browser_url())
+
+    def show_companion_url(self, parent: Tk | Toplevel | None = None) -> None:
+        parent = parent or self.root
+        if not self._companion_is_running():
+            self.launch_companion_server(parent=parent)
+            if not self._companion_is_running():
+                return
+        message = (
+            "Companion server is running.\n\n"
+            f"Desktop URL: {self._companion_browser_url()}\n"
+            f"Bound host: {self._companion_display_host()}:{self.companion_port}\n"
+        )
+        tailscale_url = self._companion_tailscale_url()
+        if tailscale_url:
+            message += f"Tailscale URL: {tailscale_url}\n"
+        if self.companion_host in {"127.0.0.1", "localhost"}:
+            message += "\nThe server is currently bound to localhost only. Set `AGENT_RUNNER_COMPANION_HOST=0.0.0.0` before launch for phone access over Tailscale."
+        messagebox.showinfo("Companion URL", message, parent=parent)
+
+    def open_companion_tailscale_url(self, parent: Tk | Toplevel | None = None) -> None:
+        parent = parent or self.root
+        url = self._companion_tailscale_url()
+        if not url:
+            messagebox.showerror(
+                "agent-runner",
+                "No Tailscale hostname was found on this machine.",
+                parent=parent,
+            )
+            return
+        if not self._companion_is_running():
+            self.launch_companion_server(parent=parent)
+            if not self._companion_is_running():
+                return
+        if self.companion_host in {"127.0.0.1", "localhost"}:
+            messagebox.showinfo(
+                "Companion Tailscale URL",
+                "The companion server is running, but it is bound to localhost only.\n\n"
+                f"Tailscale link: {url}\n\n"
+                "Restart the app with `AGENT_RUNNER_COMPANION_HOST=0.0.0.0` to make that link reachable from your phone.",
+                parent=parent,
+            )
+            return
+        webbrowser.open(url)
+
+    def _companion_is_running(self) -> bool:
+        return bool(
+            self.companion_server is not None
+            and self.companion_server_thread is not None
+            and self.companion_server_thread.is_alive()
+        )
+
+    def _companion_browser_url(self) -> str:
+        return f"http://127.0.0.1:{self.companion_port}/m"
+
+    def _companion_display_host(self) -> str:
+        if self.companion_host in {"0.0.0.0", "::"}:
+            try:
+                return socket.gethostname()
+            except Exception:
+                return self.companion_host
+        return self.companion_host
+
+    def _companion_tailscale_url(self) -> str | None:
+        host = self._tailscale_host()
+        if not host:
+            return None
+        return f"http://{host}:{self.companion_port}/m"
+
+    def _tailscale_host(self) -> str | None:
+        info = self.tailscale_info or {}
+        dns_name = str(info.get("dns_name") or "").strip().rstrip(".")
+        if dns_name:
+            return dns_name
+        ip = str(info.get("ip") or "").strip()
+        return ip or None
+
+    def _load_tailscale_info(self) -> dict[str, str]:
+        try:
+            result = subprocess.run(
+                ["tailscale", "status", "--json"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=2,
+            )
+        except Exception:
+            return {}
+        if result.returncode != 0 or not result.stdout.strip():
+            return {}
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        self_payload = payload.get("Self")
+        if not isinstance(self_payload, dict):
+            return {}
+        dns_name = str(self_payload.get("DNSName") or "").strip().rstrip(".")
+        ip = ""
+        raw_ips = self_payload.get("TailscaleIPs")
+        if isinstance(raw_ips, list):
+            for item in raw_ips:
+                if isinstance(item, str) and "." in item:
+                    ip = item
+                    break
+            if not ip:
+                for item in raw_ips:
+                    if isinstance(item, str) and item:
+                        ip = item
+                        break
+        return {
+            "dns_name": dns_name,
+            "ip": ip,
+        }
+
+    def _ensure_companion_server_started(self) -> None:
+        if self._companion_is_running():
+            return
+        self.launch_companion_server(parent=self.root, open_browser=False)
 
     def _schedule_update_poll(self) -> None:
         self.root.after(2500, self._poll_update_signal)

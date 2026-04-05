@@ -93,6 +93,12 @@ class RunMode(StrEnum):
     MESSAGE = "message"
 
 
+class AssistantCapabilityMode(StrEnum):
+    ASK = "ask"
+    OPS = "ops"
+    DEV = "dev"
+
+
 class ChecksPolicy(StrEnum):
     AUTO = "auto"
     CUSTOM = "custom"
@@ -125,6 +131,8 @@ class ConversationRecord:
     title: str
     created_at: str
     updated_at: str
+    assistant_mode: AssistantCapabilityMode = AssistantCapabilityMode.ASK
+    page_context: dict[str, object] = field(default_factory=dict)
     summary: str | None = None
     messages: list[ConversationMessage] = field(default_factory=list)
 
@@ -135,6 +143,8 @@ class WorkspaceSessionState:
     active_conversation_id: str | None = None
     conversation_ids: list[str] = field(default_factory=list)
     conversations_panel_collapsed: bool = False
+    display_name: str | None = None
+    repo_path: str | None = None
 
 
 @dataclass(slots=True)

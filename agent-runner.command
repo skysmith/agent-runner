@@ -71,9 +71,9 @@ APPLESCRIPT
 }
 
 # Optional web-mode support: if a URL is configured, open it first.
-APP_URL="${AGENT_RUNNER_URL:-}"
+APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:8765}"
 URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
-if [[ -z "$APP_URL" && -f "$URL_FILE" ]]; then
+if [[ -f "$URL_FILE" ]]; then
   APP_URL="$(head -n 1 "$URL_FILE" | tr -d '\r')"
 fi
 if [[ -n "$APP_URL" ]]; then
@@ -84,7 +84,11 @@ fi
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
 } >>"$LOG_FILE"
 
-nohup env PYTHONPATH="$PYTHONPATH" bash -lc 'exec -a "agent-runner" "$0" -m agent_runner ui --repo "$1"' "$PYTHON_BIN" "$SCRIPT_DIR" >>"$LOG_FILE" 2>&1 &
+WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
+WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
+WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-jungleboogie}"
+
+nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" bash -lc 'exec -a "agent-runner" "$0" -m agent_runner web --repo "$1" --host "$2" --port "$3" --password "$4"' "$PYTHON_BIN" "$SCRIPT_DIR" "$WEB_HOST" "$WEB_PORT" "$WEB_PASSWORD" >>"$LOG_FILE" 2>&1 &
 APP_PID="$!"
 
 # Only close the originating terminal once the app is confirmed running.

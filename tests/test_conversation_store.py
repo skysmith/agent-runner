@@ -55,6 +55,19 @@ def test_controller_delete_active_conversation_selects_fallback(tmp_path: Path) 
     assert controller.state.active_conversation_id == second.id
 
 
+def test_workspace_profile_round_trip(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
+    controller = WorkspaceConversationController(store, "workspace-1")
+    controller.set_workspace_profile(
+        display_name="Clementine Kids",
+        repo_path="/Users/sky/Documents/codex/business/clementine-kids",
+    )
+
+    reloaded = store.load_workspace_state("workspace-1")
+    assert reloaded.display_name == "Clementine Kids"
+    assert reloaded.repo_path == "/Users/sky/Documents/codex/business/clementine-kids"
+
+
 def test_derive_conversation_title_uses_first_non_empty_line() -> None:
     title = derive_conversation_title("\n\nInvestigate dashboard regression\nwith extra details")
     assert title == "Investigate dashboard regression"

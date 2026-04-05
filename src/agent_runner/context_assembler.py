@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 from .conversation_store import build_transcript, synthesize_summary
-from .models import ConversationRecord, ProviderKind, RunMode
+from .models import AssistantCapabilityMode, ConversationRecord, ProviderKind, RunMode
 from .prompt_context import load_mind_map, render_mind_map_block
 
 DEFAULT_CONTEXT_CHAR_CAP = 12000
@@ -45,6 +46,8 @@ class ContextAssembler:
         run_mode: RunMode,
         conversation: ConversationRecord,
         current_input: str,
+        assistant_mode: AssistantCapabilityMode | None = None,
+        page_context: dict[str, object] | None = None,
     ) -> EffectiveContext:
         return EffectiveContext(
             system_context=self._system_context(
@@ -52,6 +55,8 @@ class ContextAssembler:
                 provider=provider,
                 model=model,
                 run_mode=run_mode,
+                assistant_mode=assistant_mode or conversation.assistant_mode,
+                page_context=page_context if page_context is not None else conversation.page_context,
             ),
             conversation_context=self._conversation_context(conversation),
             current_input=f"CURRENT USER MESSAGE:\n{current_input.strip()}",
@@ -66,6 +71,8 @@ class ContextAssembler:
         run_mode: RunMode,
         conversation: ConversationRecord,
         current_input: str,
+        assistant_mode: AssistantCapabilityMode | None = None,
+        page_context: dict[str, object] | None = None,
     ) -> EffectiveContext:
         return EffectiveContext(
             system_context=self._system_context(
@@ -73,6 +80,8 @@ class ContextAssembler:
                 provider=provider,
                 model=model,
                 run_mode=run_mode,
+                assistant_mode=assistant_mode or conversation.assistant_mode,
+                page_context=page_context if page_context is not None else conversation.page_context,
             ),
             conversation_context=self._conversation_context(conversation),
             current_input=f"LATEST USER DIRECTIVE:\n{current_input.strip()}",
@@ -88,7 +97,16 @@ class ContextAssembler:
         source = head[-self.summary_source_count :]
         return synthesize_summary(source) or None
 
-    def _system_context(self, *, repo_path: Path, provider: ProviderKind, model: str, run_mode: RunMode) -> str:
+    def _system_context(
+        self,
+        *,
+        repo_path: Path,
+        provider: ProviderKind,
+        model: str,
+        run_mode: RunMode,
+        assistant_mode: AssistantCapabilityMode,
+        page_context: dict[str, object],
+    ) -> str:
         mind_map_block = render_mind_map_block(load_mind_map(repo_path)).strip()
         lines = [
             "WORKSPACE CONTEXT:",
@@ -96,7 +114,39 @@ class ContextAssembler:
             f"- provider: {provider}",
             f"- model: {model}",
             f"- run_mode: {run_mode}",
+            f"- assistant_mode: {assistant_mode}",
+            "",
+            "CAPABILITY CONTRACT:",
         ]
+        if assistant_mode == AssistantCapabilityMode.ASK:
+            lines.extend(
+                [
+                    "- ask mode: read-only explanations, comparisons, and analysis.",
+                    "- do not propose or perform destructive or mutating production actions.",
+                ]
+            )
+        elif assistant_mode == AssistantCapabilityMode.OPS:
+            lines.extend(
+                [
+                    "- ops mode: bounded operational workflows and summaries are allowed.",
+                    "- prioritize reversible actions and clearly call out risk.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "- dev mode: deeper engineering workflows are allowed.",
+                    "- still explain risks before high-impact actions.",
+                ]
+            )
+        if page_context:
+            lines.extend(
+                [
+                    "",
+                    "PAGE CONTEXT (JSON):",
+                    json.dumps(page_context, indent=2, sort_keys=True)[:4000],
+                ]
+            )
         if mind_map_block:
             lines.extend(["", mind_map_block])
         return "\n".join(lines).strip()

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,13 +37,15 @@ def run_codex_json(
     if dry_run:
         return CodexExecResult(payload={}, raw_jsonl="", stderr="", return_code=0)
 
+    resolved_cmd = _resolve_codex_command(codex_bin)
+
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".json", delete=False) as schema_file:
         schema_path = Path(schema_file.name)
         json.dump(schema, schema_file)
 
     try:
         cmd = [
-            codex_bin,
+            *resolved_cmd,
             "exec",
             "--json",
             "--model",
@@ -56,6 +61,12 @@ def run_codex_json(
         if extra_access_dir and extra_access_dir.exists():
             cmd.extend(["--add-dir", str(extra_access_dir)])
         cmd.append(prompt)
+        _log_codex_invocation(
+            repo_path=repo_path,
+            cmd=cmd,
+            codex_bin=codex_bin,
+            resolved_cmd=resolved_cmd,
+        )
         proc = subprocess.run(
             cmd,
             text=True,
@@ -82,6 +93,37 @@ def run_codex_json(
         stderr=proc.stderr,
         return_code=proc.returncode,
     )
+
+
+def _resolve_codex_command(codex_bin: str) -> list[str]:
+    candidate = shutil.which(codex_bin) if os.sep not in codex_bin else codex_bin
+    discovered = Path(candidate or codex_bin).expanduser()
+    if not discovered.exists():
+        return [codex_bin]
+    resolved = discovered.resolve()
+    if resolved.suffix == ".js":
+        node_bin = shutil.which("node")
+        if node_bin:
+            return [node_bin, str(resolved)]
+    return [str(discovered)]
+
+
+def _log_codex_invocation(*, repo_path: Path, cmd: list[str], codex_bin: str, resolved_cmd: list[str]) -> None:
+    try:
+        log_dir = repo_path / ".agent-runner" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "codex_bin": codex_bin,
+            "resolved_cmd": resolved_cmd,
+            "cmd": cmd,
+            "cwd": str(repo_path),
+            "path": os.environ.get("PATH", ""),
+        }
+        with (log_dir / "codex-invocations.log").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    except Exception:
+        return
 
 
 def _extract_final_json(stdout: str) -> dict | None:

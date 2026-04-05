@@ -78,3 +78,38 @@ def test_run_codex_json_includes_sandbox_and_add_dir(monkeypatch, tmp_path: Path
     assert isinstance(cmd, list)
     assert "--sandbox" in cmd and "workspace-write" in cmd
     assert "--add-dir" in cmd and str(extra_dir) in cmd
+
+
+def test_run_codex_json_invokes_js_entrypoint_via_node(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    codex_js = tmp_path / "codex.js"
+    codex_js.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    codex_shim = tmp_path / "codex"
+    codex_shim.symlink_to(codex_js)
+
+    monkeypatch.setattr("agent_runner.codex_client.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else str(codex_shim))
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='{"final_output":{"ok":true}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agent_runner.codex_client.subprocess.run", fake_run)
+
+    result = run_codex_json(
+        codex_bin="codex",
+        prompt="{}",
+        schema={"type": "object"},
+        repo_path=tmp_path,
+        timeout_seconds=1,
+        phase_name="planner",
+    )
+
+    assert result.payload == {"ok": True}
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[:2] == ["/usr/local/bin/node", str(codex_js)]

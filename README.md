@@ -40,6 +40,20 @@ Desktop UI (paragraph prompt + status + what changed):
 agent-runner ui
 ```
 
+`ui` now acts as a thin launcher for the browser-first runtime (`agent-runner web`) and opens your browser.
+
+Browser-first local runtime (canonical flow):
+
+```bash
+agent-runner web
+```
+
+Legacy alias (same HTTP runtime, network-first bind default):
+
+```bash
+agent-runner serve
+```
+
 Desktop UI now supports:
 
 - multiple windows
@@ -103,6 +117,15 @@ Run artifacts now save with build-aware folders such as `run-b0001-<utc-stamp>`,
 Smoke test + handoff notes for launch behavior and fallback commands:
 
 - `docs/step-6-smoke-test-and-handoff.md`
+- `docs/hosting-handoff.md` (current hosted location, deploy flow, and service runbook)
+
+Companion UI notes:
+
+- The web runtime serves the main UI at `/` and compact mode at `/m`.
+- `agent-runner web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
+- `agent-runner serve` keeps `0.0.0.0` default binding for easy LAN access.
+- Optional password protection is available with `--password` (HTTP basic auth).
+- `agent-runner.command` defaults to web mode with `0.0.0.0` bind and password `jungleboogie` (override via `AGENT_RUNNER_WEB_PASSWORD`).
 
 Flags:
 
@@ -169,3 +192,4 @@ npm run build
 
 - Consider a native embedded webview host so the `lab/ai-art` dashboard can run inside an `Image Gen` tab instead of opening externally.
 - Packaged app smoke-test checklist: `docs/packaged-smoke-test-checklist.md`
+- Web-first migration plan: `docs/web-migration-plan.md`
