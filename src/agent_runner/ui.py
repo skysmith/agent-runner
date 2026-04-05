@@ -1808,7 +1808,7 @@ class WorkspaceApp:
         )
 
     def _companion_browser_url(self) -> str:
-        return f"http://127.0.0.1:{self.companion_port}/m"
+        return self._cache_busted_url(f"http://127.0.0.1:{self.companion_port}/")
 
     def _companion_display_host(self) -> str:
         if self.companion_host in {"0.0.0.0", "::"}:
@@ -1822,7 +1822,11 @@ class WorkspaceApp:
         host = self._tailscale_host()
         if not host:
             return None
-        return f"http://{host}:{self.companion_port}/m"
+        return self._cache_busted_url(f"http://{host}:{self.companion_port}/")
+
+    def _cache_busted_url(self, url: str) -> str:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}_ar_open={int(time.time() * 1000)}"
 
     def _tailscale_host(self) -> str | None:
         info = self.tailscale_info or {}

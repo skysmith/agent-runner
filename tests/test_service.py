@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import json
 from pathlib import Path
 from threading import Event
 import subprocess
@@ -252,6 +253,170 @@ def test_list_active_repositories_scans_git_roots(tmp_path: Path) -> None:
     paths = [item["repo_path"] for item in results]
     assert str(repo_a) in paths
     assert str(repo_b) in paths
+
+
+def test_create_studio_game_scaffolds_preview_and_publish(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    created = service.create_studio_game(
+        game_title="Moon Mango Jump",
+        template_kind="platformer",
+        theme_prompt="A playful moonlit jungle.",
+    )
+
+    workspace = created["workspace"]
+    assert workspace["workspace_kind"] == "studio_game"
+    assert workspace["template_kind"] == "platformer"
+    assert workspace["preview_state"] == "ready"
+    assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/index.html"
+
+    repo_path = Path(str(workspace["repo_path"]))
+    assert (repo_path / "index.html").exists()
+    assert (repo_path / "game.js").exists()
+    assert (repo_path / "alcove-studio.json").exists()
+
+    published = service.publish_studio_game(str(workspace["id"]))
+    assert published["publish_state"] == "published"
+    assert str(published["publish_url"]).startswith("/play/")
+
+
+def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    web = service.create_studio_workspace(
+        workspace_kind="studio_web",
+        artifact_title="Northstar Site",
+        template_kind="landing-page",
+        theme_prompt="A calm premium launch page.",
+    )["workspace"]
+    data = service.create_studio_workspace(
+        workspace_kind="studio_data",
+        artifact_title="Revenue Atlas",
+        template_kind="dashboard",
+        theme_prompt="Trustworthy revenue trends and simple charts.",
+    )["workspace"]
+    docs = service.create_studio_workspace(
+        workspace_kind="studio_docs",
+        artifact_title="Northstar Docs",
+        template_kind="docs-site",
+        theme_prompt="Friendly setup docs for new builders.",
+    )["workspace"]
+
+    assert web["workspace_kind"] == "studio_web"
+    assert web["artifact_title"] == "Northstar Site"
+    assert (Path(str(web["repo_path"])) / "app.js").exists()
+
+    assert data["workspace_kind"] == "studio_data"
+    assert (Path(str(data["repo_path"])) / "data.js").exists()
+    assert (Path(str(data["repo_path"])) / "data.json").exists()
+
+    assert docs["workspace_kind"] == "studio_docs"
+    assert (Path(str(docs["repo_path"])) / "docs.js").exists()
+    assert (Path(str(docs["repo_path"])) / "guide.md").exists()
+
+    published = service.publish_studio_workspace(str(web["id"]))
+    assert published["publish_state"] == "published"
+    assert str(published["publish_url"]).startswith("/play/")
+
+
+def test_imported_studio_workspace_preserves_custom_preview_entry_path(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    repo = tmp_path / "gnome-roundup"
+    dist = repo / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Gnome Roundup</title>", encoding="utf-8")
+
+    workspace = service.define_workspace(
+        "gnome-roundup",
+        display_name="Gnome Roundup",
+        repo_path=str(repo),
+        workspace_kind="studio_game",
+        artifact_title="Gnome Roundup",
+        template_kind="phaser-vite",
+        preview_url="/studio/preview/gnome-roundup/dist/index.html",
+        preview_state="ready",
+        publish_state="draft",
+    )
+
+    refreshed = service.refresh_studio_preview("gnome-roundup")
+    assert refreshed["preview_url"] == "/studio/preview/gnome-roundup/dist/index.html"
+
+    published = service.publish_studio_workspace("gnome-roundup")
+    assert published["publish_url"] == "/play/gnome-roundup/dist/index.html"
+
+
+def test_refresh_studio_preview_builds_imported_node_project(monkeypatch, tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    repo = tmp_path / "gnome-roundup"
+    dist = repo / "dist"
+    dist.mkdir(parents=True)
+    package_json = {
+        "name": "gnome-roundup",
+        "scripts": {
+            "build": "vite build",
+        },
+    }
+    (repo / "package.json").write_text(json.dumps(package_json), encoding="utf-8")
+    (dist / "index.html").write_text("<!doctype html><title>old</title>", encoding="utf-8")
+
+    service.define_workspace(
+        "gnome-roundup",
+        display_name="Gnome Roundup",
+        repo_path=str(repo),
+        workspace_kind="studio_game",
+        artifact_title="Gnome Roundup",
+        template_kind="phaser-vite",
+        preview_url="/studio/preview/gnome-roundup/dist/index.html",
+        preview_state="ready",
+        publish_state="draft",
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd=None, check=False, capture_output=False, text=False):
+        calls.append(list(cmd))
+        (dist / "index.html").write_text("<!doctype html><title>fresh</title>", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="built", stderr="")
+
+    monkeypatch.setattr("agent_runner.service.subprocess.run", fake_run)
+
+    refreshed = service.refresh_studio_preview("gnome-roundup")
+
+    assert calls == [["npm", "run", "build"]]
+    assert refreshed["preview_state"] == "ready"
+    assert (dist / "index.html").read_text(encoding="utf-8") == "<!doctype html><title>fresh</title>"
+
+
+def test_refresh_studio_preview_surfaces_build_failure(monkeypatch, tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    repo = tmp_path / "broken-game"
+    repo.mkdir(parents=True)
+    (repo / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}), encoding="utf-8")
+
+    service.define_workspace(
+        "broken-game",
+        display_name="Broken Game",
+        repo_path=str(repo),
+        workspace_kind="studio_game",
+        artifact_title="Broken Game",
+        template_kind="phaser-vite",
+        preview_url="/studio/preview/broken-game/dist/index.html",
+        preview_state="draft",
+        publish_state="draft",
+    )
+
+    def fake_run(cmd, cwd=None, check=False, capture_output=False, text=False):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="vite exploded")
+
+    monkeypatch.setattr("agent_runner.service.subprocess.run", fake_run)
+
+    try:
+        service.refresh_studio_preview("broken-game")
+    except ValueError as exc:
+        assert "Could not build Studio preview" in str(exc)
+        assert "vite exploded" in str(exc)
+    else:
+        raise AssertionError("Expected build failure to surface")
 
 
 def _make_service(tmp_path: Path, *, phase_client) -> AgentRunnerService:

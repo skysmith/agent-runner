@@ -145,12 +145,25 @@ class WorkspaceSessionState:
     conversations_panel_collapsed: bool = False
     display_name: str | None = None
     repo_path: str | None = None
+    workspace_kind: str = "standard"
+    artifact_title: str | None = None
+    template_kind: str | None = None
+    game_title: str | None = None
+    theme_prompt: str | None = None
+    preview_url: str | None = None
+    preview_state: str | None = None
+    publish_url: str | None = None
+    publish_state: str | None = None
+    publish_slug: str | None = None
 
 
 @dataclass(slots=True)
 class AppSettings:
     provider: ProviderKind = ProviderKind.CODEX
     model: str = "gpt-5.3-codex"
+    planner_model: str | None = None
+    builder_model: str | None = None
+    reviewer_model: str | None = None
     codex_bin: str = "codex"
     ollama_host: str = "http://127.0.0.1:11434"
     extra_access_dir: Path | None = None

@@ -70,33 +70,68 @@ APPLESCRIPT
   fi
 }
 
-# Optional web-mode support: if a URL is configured, open it first.
-APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:8765}"
-URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
-if [[ -f "$URL_FILE" ]]; then
-  APP_URL="$(head -n 1 "$URL_FILE" | tr -d '\r')"
-fi
-if [[ -n "$APP_URL" ]]; then
-  open "$APP_URL"
-fi
-
-{
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
-} >>"$LOG_FILE"
-
 WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
 WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
 WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-jungleboogie}"
+APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
+OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
+URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
+} >>"$LOG_FILE"
+
+mkdir -p "$(dirname "$URL_FILE")"
+printf '%s\n' "$APP_URL" >"$URL_FILE"
+
+server_matches_expected() {
+  "$PYTHON_BIN" - "$APP_URL" "$WEB_PASSWORD" "$SCRIPT_DIR" <<'PY'
+import base64
+import json
+import sys
+import urllib.error
+import urllib.request
+
+url, password, expected_repo = sys.argv[1:4]
+request = urllib.request.Request(url.rstrip("/") + "/api/server-info")
+token = base64.b64encode(f"user:{password}".encode("utf-8")).decode("ascii")
+request.add_header("Authorization", f"Basic {token}")
+try:
+    with urllib.request.urlopen(request, timeout=1.5) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    sys.exit(1)
+if payload.get("server_kind") != "agent_runner_web":
+    sys.exit(2)
+if payload.get("repo_path") != expected_repo:
+    sys.exit(3)
+sys.exit(0)
+PY
+}
+
+if server_matches_expected; then
+  open "$OPEN_URL"
+  close_origin_terminal_session
+  exit 0
+fi
 
 nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" bash -lc 'exec -a "agent-runner" "$0" -m agent_runner web --repo "$1" --host "$2" --port "$3" --password "$4"' "$PYTHON_BIN" "$SCRIPT_DIR" "$WEB_HOST" "$WEB_PORT" "$WEB_PASSWORD" >>"$LOG_FILE" 2>&1 &
 APP_PID="$!"
 
-# Only close the originating terminal once the app is confirmed running.
-sleep 1
-if ! kill -0 "$APP_PID" 2>/dev/null; then
-  echo "Failed to start agent-runner UI. See ${LOG_FILE} for details." >&2
-  exit 1
-fi
+# Only close the originating terminal once the expected runtime is confirmed.
+for _ in $(seq 1 50); do
+  if server_matches_expected; then
+    open "$OPEN_URL"
+    close_origin_terminal_session
+    exit 0
+  fi
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo "Failed to start agent-runner UI. See ${LOG_FILE} for details." >&2
+    exit 1
+  fi
+  sleep 0.1
+done
 
-close_origin_terminal_session
-exit 0
+echo "agent-runner UI did not become healthy on ${APP_URL}. See ${LOG_FILE} for details." >&2
+exit 1

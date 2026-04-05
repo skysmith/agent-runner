@@ -98,6 +98,111 @@ def test_launcher_script_targets_only_originating_tty_for_close(tmp_path: Path) 
     assert "close t" in applescript_payload
 
 
+def test_launcher_script_ignores_stale_web_url_and_rewrites_localhost(tmp_path: Path) -> None:
+    port = "18765"
+    repo_root = Path(__file__).resolve().parents[1]
+    launcher_src = repo_root / "agent-runner.command"
+    launcher_dst = tmp_path / "agent-runner.command"
+    launcher_dst.write_text(launcher_src.read_text(encoding="utf-8"), encoding="utf-8")
+    launcher_dst.chmod(launcher_dst.stat().st_mode | stat.S_IXUSR)
+
+    state_dir = tmp_path / ".agent-runner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "web-url").write_text("https://stale.example.test\n", encoding="utf-8")
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    fake_python = bin_dir / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "python_log=\"${TMP_PYTHON_LOG:?}\"\n"
+        "if [[ \"$1\" == \"-\" ]]; then\n"
+        "  cat >/dev/null\n"
+        "  exit 1\n"
+        "fi\n"
+        "printf '%s\\n' \"$*\" >> \"$python_log\"\n"
+        "repo=''\n"
+        f"port='{port}'\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    --repo) repo=\"$2\"; shift 2 ;;\n"
+        "    --port) port=\"$2\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3 - \"$repo\" \"$port\" <<'PY'\n"
+        "import json\n"
+        "import sys\n"
+        "import threading\n"
+        "import time\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "\n"
+        "repo = sys.argv[1]\n"
+        "port = int(sys.argv[2])\n"
+        "\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path != '/api/server-info':\n"
+        "            self.send_response(404)\n"
+        "            self.end_headers()\n"
+        "            return\n"
+        "        payload = {\n"
+        "            'server_kind': 'agent_runner_web',\n"
+        "            'repo_path': repo,\n"
+        "            'build_label': 't01',\n"
+        "        }\n"
+        "        body = json.dumps(payload).encode('utf-8')\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('Content-Type', 'application/json')\n"
+        "        self.send_header('Content-Length', str(len(body)))\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(body)\n"
+        "\n"
+        "    def log_message(self, format, *args):\n"
+        "        return\n"
+        "\n"
+        "server = ThreadingHTTPServer(('127.0.0.1', port), Handler)\n"
+        "thread = threading.Thread(target=server.serve_forever, daemon=True)\n"
+        "thread.start()\n"
+        "time.sleep(2)\n"
+        "server.shutdown()\n"
+        "thread.join(timeout=1)\n"
+        "PY\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    open_log = tmp_path / "open.log"
+    fake_open = bin_dir / "open"
+    fake_open.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"${TMP_OPEN_LOG:?}\"\n",
+        encoding="utf-8",
+    )
+    fake_open.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["TMP_OPEN_LOG"] = str(open_log)
+    env["TMP_PYTHON_LOG"] = str(tmp_path / "python.log")
+    env["AGENT_RUNNER_WEB_PORT"] = port
+
+    completed = subprocess.run(
+        ["/bin/bash", str(launcher_dst)],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert (state_dir / "web-url").read_text(encoding="utf-8").strip() == f"http://127.0.0.1:{port}"
+    assert f"http://127.0.0.1:{port}" in open_log.read_text(encoding="utf-8")
+
+
 def test_combined_session_flow_for_update_badge_reload_queue_and_tab_bar_visibility() -> None:
     app = WorkspaceApp.__new__(WorkspaceApp)
     app.coordinator = RunCoordinator()

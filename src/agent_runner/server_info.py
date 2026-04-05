@@ -3,10 +3,17 @@ from __future__ import annotations
 import socket
 import subprocess
 import shutil
+from pathlib import Path
 from typing import Any
 
 
-def server_info(bind_host: str, bind_port: int) -> dict[str, Any]:
+def server_info(
+    bind_host: str,
+    bind_port: int,
+    *,
+    repo_path: Path | None = None,
+    build_label: str | None = None,
+) -> dict[str, Any]:
     localhost_url = f"http://127.0.0.1:{bind_port}"
     host_text = bind_host.strip() or "0.0.0.0"
     localhost_only = is_localhost_bind(host_text)
@@ -21,7 +28,9 @@ def server_info(bind_host: str, bind_port: int) -> dict[str, Any]:
     if not localhost_only and tailscale_url and tailscale_url not in reachable:
         reachable.append(tailscale_url)
 
+    resolved_repo = repo_path.resolve() if repo_path is not None else None
     return {
+        "server_kind": "agent_runner_web",
         "bind_host": host_text,
         "bind_port": bind_port,
         "localhost_url": localhost_url,
@@ -29,6 +38,9 @@ def server_info(bind_host: str, bind_port: int) -> dict[str, Any]:
         "tailscale_url": None if localhost_only else tailscale_url,
         "localhost_only": localhost_only,
         "reachable_urls": reachable,
+        "repo_path": str(resolved_repo) if resolved_repo is not None else None,
+        "repo_name": resolved_repo.name if resolved_repo is not None else None,
+        "build_label": build_label,
     }
 
 

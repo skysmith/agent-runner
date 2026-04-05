@@ -2,7 +2,7 @@
 from pathlib import Path
 
 root = Path.cwd().resolve()
-icon_path = root / "build" / "macos" / "agent-runner.app" / "Contents" / "Resources" / "agent-runner.icns"
+icon_path = root / "build" / "macos" / "Alcove.app" / "Contents" / "Resources" / "Alcove.icns"
 icon = str(icon_path) if icon_path.exists() else None
 
 a = Analysis(
@@ -24,7 +24,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="agent-runner",
+    name="Alcove",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -39,13 +39,13 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="agent-runner",
+    name="Alcove",
 )
 
 app = BUNDLE(
     coll,
-    name="agent-runner.app",
+    name="Alcove.app",
     icon=icon,
-    bundle_identifier="local.agent-runner.packaged",
+    bundle_identifier="local.alcove.packaged",
     version="1.0.0",
 )

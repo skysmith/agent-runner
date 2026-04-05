@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESKTOP_DIR="${HOME}/Desktop"
-APP_NAME="agent-runner"
+APP_NAME="Alcove"
 APP_BUNDLE="${DESKTOP_DIR}/${APP_NAME}.app"
 SOURCE_APP="${SCRIPT_DIR}/build/macos/${APP_NAME}.app"
 

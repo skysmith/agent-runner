@@ -30,6 +30,9 @@ def load_app_settings(path: Path, defaults: AppSettings) -> AppSettings:
     return AppSettings(
         provider=provider,
         model=str(raw.get("model", defaults.model)),
+        planner_model=_optional_text(raw.get("planner_model"), defaults.planner_model),
+        builder_model=_optional_text(raw.get("builder_model"), defaults.builder_model),
+        reviewer_model=_optional_text(raw.get("reviewer_model"), defaults.reviewer_model),
         codex_bin=str(raw.get("codex_bin", defaults.codex_bin)),
         ollama_host=str(raw.get("ollama_host", defaults.ollama_host)),
         extra_access_dir=extra_access_dir,
@@ -62,3 +65,10 @@ def _as_string_list(value: object, fallback: list[str]) -> list[str]:
             if text:
                 items.append(text)
     return items
+
+
+def _optional_text(value: object, fallback: str | None = None) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return fallback

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import traceback
 import uuid
 from email.parser import BytesParser
@@ -11,6 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+import qrcode
+import qrcode.image.svg
 
 from .models import AssistantCapabilityMode, RunMode
 from .server_info import server_info
@@ -34,6 +38,25 @@ def create_server(
 ) -> ThreadingHTTPServer:
     password = (access_password or "").strip() or None
 
+    def connections_payload(server_port: int) -> dict[str, Any]:
+        payload = server_info(
+            host,
+            server_port,
+            repo_path=service.config.repo_path,
+            build_label=read_build_label(service.config.repo_path),
+        )
+        local_url = str(payload["localhost_url"])
+        phone_url = str(payload["tailscale_url"] or "").strip()
+        payload["local_url"] = local_url
+        payload["phone_url"] = phone_url or None
+        payload["phone_enabled"] = bool(phone_url)
+        payload["phone_reason"] = (
+            "Available on Tailscale."
+            if phone_url
+            else "Tailscale phone access is not available right now."
+        )
+        return payload
+
     class CompanionHandler(BaseHTTPRequestHandler):
         server_version = "agent-runner-web/1.0"
 
@@ -46,6 +69,16 @@ def create_server(
             try:
                 if path == "/api/workspaces":
                     self._json_response({"workspaces": service.list_workspaces()})
+                    return
+                if path.startswith("/api/workspaces/") and path.endswith("/studio"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(service.get_studio_workspace(workspace_id))
+                    return
+                if path == "/api/settings":
+                    self._json_response(service.get_settings())
+                    return
+                if path == "/api/providers/ollama/models":
+                    self._json_response(service.list_ollama_models())
                     return
                 if path == "/api/repositories/active":
                     limit = _query_int(query, "limit", default=12)
@@ -115,12 +148,31 @@ def create_server(
                     )
                     return
                 if path == "/api/server-info":
-                    payload = server_info(host, self.server.server_port)
-                    payload["build_label"] = read_build_label(service.config.repo_path)
-                    self._json_response(payload)
+                    self._json_response(connections_payload(self.server.server_port))
+                    return
+                if path == "/api/connections":
+                    self._json_response(connections_payload(self.server.server_port))
+                    return
+                if path == "/api/connections/phone-qr.svg":
+                    payload = connections_payload(self.server.server_port)
+                    phone_url = str(payload.get("phone_url") or "").strip()
+                    if not phone_url:
+                        self._error_response(HTTPStatus.CONFLICT, "Phone access is not available.")
+                        return
+                    self._svg_response(_qr_svg(phone_url))
                     return
                 if path == "/":
                     self._html_response(render_web_app())
+                    return
+                if path.startswith("/studio/preview/"):
+                    workspace_id = _path_part(path, 2)
+                    relative_path = _relative_file_path(path, prefix=f"/studio/preview/{workspace_id}/")
+                    self._file_response(service.studio_preview_file(workspace_id, relative_path))
+                    return
+                if path.startswith("/play/"):
+                    publish_slug = _path_part(path, 1)
+                    relative_path = _relative_file_path(path, prefix=f"/play/{publish_slug}/")
+                    self._file_response(service.published_game_file(publish_slug, relative_path))
                     return
                 if path == "/m":
                     self._html_response(render_workspaces(service))
@@ -142,6 +194,8 @@ def create_server(
                 self._error_response(HTTPStatus.NOT_FOUND, "Not found")
             except KeyError:
                 self._error_response(HTTPStatus.NOT_FOUND, "Conversation not found")
+            except FileNotFoundError:
+                self._error_response(HTTPStatus.NOT_FOUND, "File not found")
             except ValueError as exc:
                 self._error_response(HTTPStatus.BAD_REQUEST, str(exc))
             except RuntimeError as exc:
@@ -162,6 +216,39 @@ def create_server(
                             _required_body_text(body, "id"),
                             display_name=_body_text(body, "display_name"),
                             repo_path=_body_text(body, "repo_path"),
+                            workspace_kind=_body_text(body, "workspace_kind"),
+                            artifact_title=_body_text(body, "artifact_title"),
+                            template_kind=_body_text(body, "template_kind"),
+                            game_title=_body_text(body, "game_title"),
+                            theme_prompt=_body_text(body, "theme_prompt"),
+                            preview_url=_body_text(body, "preview_url"),
+                            preview_state=_body_text(body, "preview_state"),
+                            publish_url=_body_text(body, "publish_url"),
+                            publish_state=_body_text(body, "publish_state"),
+                            publish_slug=_body_text(body, "publish_slug"),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/studio/workspaces":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_studio_workspace(
+                            workspace_kind=_body_text(body, "workspace_kind") or "studio_game",
+                            artifact_title=_required_body_text(body, "artifact_title"),
+                            template_kind=_body_text(body, "template_kind") or "",
+                            theme_prompt=_body_text(body, "theme_prompt"),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/studio/games":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_studio_game(
+                            game_title=_required_body_text(body, "game_title"),
+                            template_kind=_body_text(body, "template_kind") or "blank",
+                            theme_prompt=_body_text(body, "theme_prompt"),
                         ),
                         status=HTTPStatus.CREATED,
                     )
@@ -227,6 +314,14 @@ def create_server(
                         )
                     )
                     return
+                if path.startswith("/api/workspaces/") and path.endswith("/studio/refresh"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(service.refresh_studio_preview(workspace_id))
+                    return
+                if path.startswith("/api/workspaces/") and path.endswith("/studio/publish"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(service.publish_studio_game(workspace_id))
+                    return
                 if path == "/api/runs/stop-safely":
                     self._json_response(service.stop_run())
                     return
@@ -253,6 +348,9 @@ def create_server(
                 return
             body = self._json_body()
             try:
+                if path == "/api/settings":
+                    self._json_response(service.update_settings(body))
+                    return
                 if path.startswith("/api/conversations/"):
                     if path.endswith("/context"):
                         conversation_id = _path_part(path, 2)
@@ -452,6 +550,35 @@ def create_server(
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _svg_response(self, svg: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            data = svg.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _file_response(self, path: Path, status: HTTPStatus = HTTPStatus.OK) -> None:
+            data = path.read_bytes()
+            content_type, _ = mimetypes.guess_type(str(path))
+            if path.suffix == ".html":
+                text = data.decode("utf-8", errors="replace")
+                if (path.parent / "assets").exists():
+                    text = text.replace('src="/assets/', 'src="./assets/')
+                    text = text.replace("src='/assets/", "src='./assets/")
+                    text = text.replace('href="/assets/', 'href="./assets/')
+                    text = text.replace("href='/assets/", "href='./assets/")
+                data = text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            if path.suffix in {".html", ".js", ".css"}:
+                self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
 
@@ -513,6 +640,13 @@ def _path_part(path: str, index: int) -> str:
     if len(parts) <= index:
         raise ValueError("Malformed path.")
     return parts[index]
+
+
+def _relative_file_path(path: str, *, prefix: str) -> str:
+    if not path.startswith(prefix):
+        return "index.html"
+    remainder = path[len(prefix):].strip("/")
+    return remainder or "index.html"
 
 
 def _query_text(query: dict[str, list[str]], key: str) -> str | None:
@@ -586,3 +720,8 @@ def _image_suffix_from_mime(mime: str) -> str:
     if mime == "image/webp":
         return ".webp"
     return ".img"
+
+
+def _qr_svg(text: str) -> str:
+    image = qrcode.make(text, image_factory=qrcode.image.svg.SvgImage)
+    return image.to_string(encoding="unicode")

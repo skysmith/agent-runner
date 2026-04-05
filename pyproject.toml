@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Codex agent loop v0"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "qrcode>=7.4.2",
+]
 
 [project.optional-dependencies]
 dev = [

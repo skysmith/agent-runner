@@ -1,48 +1,95 @@
-# Secret Agent: Codex Agent Loop v1.01
+# Alcove
 
-Local orchestration loop for Codex CLI that repeatedly plans, builds, verifies, and reviews until a task is complete.
+Calm, repo-scoped control for Codex, built around visible artifacts.
 
-## What this does
+Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
 
-- Reads a task spec from `task.md` style input.
-- Calls `codex exec` in three prompted roles:
-  - planner
-  - builder
-  - reviewer
-- Runs local verification commands after each builder step.
-- Retries failing steps with reviewer feedback.
-- Writes run artifacts under `.agent-runner/`.
-- Assigns a monotonic build number to each run and stores metadata for traceability.
+It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
 
-## Prerequisites
+## Product Shape
 
-- Python 3.11+
-- Codex CLI installed (`codex --version`)
-- Codex authenticated (`codex login status` should show ChatGPT login)
+Alcove now has two closely related product patterns:
 
-## Install (dev)
+- **Finance Drawer**
+  An embedded, page-aware assistant surface that lives inside another product and understands the current route, filters, entities, and visible data.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+- **Studio modes**
+  Workspace-driven creation surfaces where the right pane shows a live artifact and the left pane steers it through a durable chat.
 
-## Usage
+The long-term studio family is:
 
-```bash
-agent-runner run task.md --check "pytest -q"
-```
+- `finance_drawer`
+- `studio_game`
+- `studio_web`
+- `studio_data`
+- `studio_docs`
 
-Desktop UI (paragraph prompt + status + what changed):
+The shared platform idea is simple:
 
-```bash
-agent-runner ui
-```
+- one durable thread per workspace
+- `Clear Chat` resets context without deleting the artifact
+- preview state and preview URL are first-class
+- publish/share/export flows are explicit
+- remix/template flows should reuse the same shell and service contract
 
-`ui` now acts as a thin launcher for the browser-first runtime (`agent-runner web`) and opens your browser.
+## Why this exists
 
-Browser-first local runtime (canonical flow):
+Codex is powerful, but raw terminal loops can still feel fragile or high-friction when you want to:
+
+- keep work tied to a specific repo or artifact
+- understand run status at a glance
+- see what changed and what checks ran
+- manage context intentionally instead of letting chat history sprawl
+- kick off or monitor work from your phone
+- keep the thing you are building visible while you steer it
+
+Alcove is an opinionated answer to that workflow.
+
+## Core ideas
+
+- One chat per workspace.
+  Your project gets a durable working thread instead of a pile of disconnected prompts.
+
+- Clear chat on purpose.
+  Reset the workspace thread when context gets stale or too large, without deleting the artifact itself.
+
+- GUI first, not terminal only.
+  Use Codex through a browser-first interface with visible status, review output, changed files, and controls like `Stop Safely`.
+
+- Phone companion built in.
+  Open the same workspace from your phone to check status, continue the thread, or send the next prompt.
+
+- Artifact visible by default.
+  Alcove is best when the right pane shows the live artifact: a game, a website, a document, a table, or an embedded contextual product surface.
+
+- Calm operational visibility.
+  Planner, builder, reviewer, checks, artifacts, and build IDs are surfaced so the tool feels legible instead of magical.
+
+## Studio roadmap
+
+The unified Alcove roadmap now treats studios as a product family:
+
+- **Game Studio**
+  The first flagship studio. Child-friendly, template-first, managed preview, and one-click publish.
+
+- **Web Studio**
+  The broadest developer-facing studio. Chat on the left, live site/app preview on the right.
+
+- **Data Studio**
+  Spreadsheet/database understanding first, safe derived transformations second, stronger trust cues throughout.
+
+- **Docs Studio**
+  Rendered docs, landing pages, tutorials, and guides beside the conversation, with strong publish/export flows.
+
+Read the unified roadmap here:
+
+- `docs/alcove-unified-studio-roadmap.md`
+
+The older finance-specific roadmap in `docs/alcove.rtf` still matters, but it should now be read as the Finance Drawer branch inside the broader Alcove platform.
+
+## Current runtime
+
+Browser-first runtime:
 
 ```bash
 agent-runner web
@@ -54,20 +101,21 @@ Legacy alias (same HTTP runtime, network-first bind default):
 agent-runner serve
 ```
 
-Desktop UI now supports:
+Desktop launcher:
 
-- multiple windows
-- tabs per window
-- one global active run at a time
-- `File -> New Image Gen Tab` to control and open `lab/ai-art` dashboard
-- `Settings -> Preferences...` for global provider/model defaults
-- `Workspace -> Workspace Options...` for per-workspace override, run mode (`loop` or `message`), and loop count
-- local voice capture into the prompt box via the `Mic` button
-- a short preflight clarifying pass before loop runs when follow-up questions would help
-- `Stop Safely` to halt after the current phase and keep your workspace state
-- compact status indicator animation in the composer while runs are active
+```bash
+agent-runner ui
+```
 
-Inline task mode (no task file):
+`ui` acts as a thin launcher for the browser-first runtime and opens your browser.
+
+Direct CLI run:
+
+```bash
+agent-runner run task.md --check "pytest -q"
+```
+
+Inline task mode:
 
 ```bash
 agent-runner run --task "check this repo for docs and summarize the architecture"
@@ -75,11 +123,43 @@ agent-runner run --task "check this repo for docs and summarize the architecture
 
 By default, `agent-runner run` targets the current directory. Use `--repo` only when you want to point at another repository.
 
+## Current capabilities
+
+Desktop and browser UI support:
+
+- multiple windows
+- tabs per window
+- one global active run at a time
+- one durable chat per workspace
+- `Clear Chat` to intentionally reset workspace context
+- local voice capture into the prompt box via the `Mic` button
+- a short preflight clarifying pass before loop runs when follow-up questions would help
+- `Stop Safely` to halt after the current phase and keep your workspace state
+- compact status indicator animation in the composer while runs are active
+- mobile companion flow at `/m`
+- Alcove Studio v1 for game workspaces with managed preview and publish/share URLs
+
 Or without installing the script entrypoint:
 
 ```bash
 PYTHONPATH=src python -m agent_runner run task.md --repo /absolute/path/to/target/repo
 ```
+
+## Install (dev)
+
+Prerequisites:
+
+- Python 3.11+
+- Codex CLI installed (`codex --version`)
+- Codex authenticated (`codex login status` should show ChatGPT login)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+## Launch and packaging
 
 To launch the UI directly, use:
 
@@ -87,14 +167,11 @@ To launch the UI directly, use:
 ./agent-runner.command
 ```
 
-Create a one-click desktop app icon named `agent-runner` (dev wrapper around this checkout):
+Create a one-click desktop app icon named `agent-runner`:
 
 ```bash
 ./scripts/install-desktop-icon.sh
 ```
-
-This creates `~/Desktop/agent-runner.app`. Click it once to launch `agent-runner` without terminal steps.
-If `.agent-runner/web-url` exists (or `AGENT_RUNNER_URL` is set), the launcher opens that URL first.
 
 For faster local iteration, there is also a thin dev-wrapper build:
 
@@ -102,32 +179,37 @@ For faster local iteration, there is also a thin dev-wrapper build:
 ./scripts/build-dev-mac-app.sh
 ```
 
-This builds `build/macos/agent-runner.app` as a lightweight wrapper around the current repo checkout. You can keep iterating on source in-place, then rebuild or reinstall the wrapper when you want to test the mac app experience.
-
-Build the standalone packaged mac app (friend-shareable artifact):
+Build the standalone packaged mac app:
 
 ```bash
 ./scripts/build-packaged-mac-app.sh
 ```
 
-This produces `dist/agent-runner.app` with a bundled Python runtime entrypoint. Use this for distribution; keep the desktop wrapper flow as a dev convenience only.
+## Phone workflow
 
-Run artifacts now save with build-aware folders such as `run-b0001-<utc-stamp>`, and each run includes `run_metadata.json`.
+The web runtime serves:
 
-Smoke test + handoff notes for launch behavior and fallback commands:
+- `/` for the main interface
+- `/m` for the compact mobile companion
+- `/studio/preview/...` for managed studio previews
+- `/play/...` for published studio artifacts
+
+`agent-runner web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
+
+`agent-runner serve` keeps `0.0.0.0` default binding for easier LAN access.
+
+Optional password protection is available with `--password` using HTTP basic auth.
+
+`agent-runner.command` defaults to web mode with `0.0.0.0` bind and password `jungleboogie` (override via `AGENT_RUNNER_WEB_PASSWORD`).
+
+Run artifacts save with build-aware folders such as `run-b0001-<utc-stamp>`, and each run includes `run_metadata.json`.
+
+Useful handoff/runbook docs:
 
 - `docs/step-6-smoke-test-and-handoff.md`
-- `docs/hosting-handoff.md` (current hosted location, deploy flow, and service runbook)
+- `docs/hosting-handoff.md`
 
-Companion UI notes:
-
-- The web runtime serves the main UI at `/` and compact mode at `/m`.
-- `agent-runner web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
-- `agent-runner serve` keeps `0.0.0.0` default binding for easy LAN access.
-- Optional password protection is available with `--password` (HTTP basic auth).
-- `agent-runner.command` defaults to web mode with `0.0.0.0` bind and password `jungleboogie` (override via `AGENT_RUNNER_WEB_PASSWORD`).
-
-Flags:
+## Command flags
 
 - `--max-step-retries N` maximum retries per step (default `2`)
 - `--phase-timeout-seconds N` timeout for each planner/builder/reviewer phase (default `240`)
@@ -147,18 +229,16 @@ If `--check` is not supplied and `# checks` is missing, the runner auto-detects 
 - Rust: `cargo test`
 - Go: `go test ./...`
 
-The runner prints phase progress to stderr (planner/builder/reviewer/checks), a final human-readable message, and exits with a concise error if a phase times out or Codex output is invalid.
-
 Nested `codex exec` calls are run with `--sandbox workspace-write`, so they can write in the target repo directory.
 
 ## Task format
 
 The parser expects Markdown headings:
 
-- `# task` (required)
-- `# constraints` (optional)
-- `# success` (required)
-- `# checks` (optional; one command per line, supports list syntax)
+- `# task` required
+- `# constraints` optional
+- `# success` required
+- `# checks` optional
 
 Example:
 
@@ -187,9 +267,3 @@ npm run build
 - No multi-agent swarm
 - No notification layer
 - No long-term memory
-
-## Future Notes
-
-- Consider a native embedded webview host so the `lab/ai-art` dashboard can run inside an `Image Gen` tab instead of opening externally.
-- Packaged app smoke-test checklist: `docs/packaged-smoke-test-checklist.md`
-- Web-first migration plan: `docs/web-migration-plan.md`

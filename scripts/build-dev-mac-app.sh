@@ -3,12 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build/macos"
-APP_NAME="agent-runner"
+APP_NAME="Alcove"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
 APP_CONTENTS="${APP_BUNDLE}/Contents"
 APP_MACOS="${APP_CONTENTS}/MacOS"
 APP_RESOURCES="${APP_CONTENTS}/Resources"
-EMOJI_ICON="🕵️"
+EMOJI_ICON="A"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
@@ -21,17 +21,17 @@ cat > "${APP_CONTENTS}/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>English</string>
   <key>CFBundleDisplayName</key>
-  <string>agent-runner</string>
+  <string>Alcove</string>
   <key>CFBundleExecutable</key>
-  <string>agent-runner</string>
+  <string>Alcove</string>
   <key>CFBundleIconFile</key>
-  <string>agent-runner</string>
+  <string>Alcove</string>
   <key>CFBundleIdentifier</key>
-  <string>local.agent-runner.devapp</string>
+  <string>local.alcove.devapp</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>agent-runner</string>
+  <string>Alcove</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -46,29 +46,61 @@ PLIST
 
 printf '%s\n' "$SCRIPT_DIR" > "${APP_RESOURCES}/repo-path"
 
-cat > "${APP_MACOS}/agent-runner" <<'LAUNCHER'
+cat > "${APP_MACOS}/Alcove" <<'LAUNCHER'
 #!/usr/bin/env bash
 set -euo pipefail
 
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_PATH="$(cat "${APP_ROOT}/Resources/repo-path")"
-LAUNCHER="${REPO_PATH}/agent-runner.command"
 export AGENT_RUNNER_APP_BUNDLE="${APP_ROOT%/Contents}"
+WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
+WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
+PASSWORD_FILE="${REPO_PATH}/.agent-runner/web-password"
+WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
+if [[ -z "${WEB_PASSWORD}" && -f "${PASSWORD_FILE}" ]]; then
+  WEB_PASSWORD="$(head -n 1 "${PASSWORD_FILE}" | tr -d '\r')"
+fi
+WEB_PASSWORD="${WEB_PASSWORD:-jungleboogie}"
+APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
+OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
+URL_FILE="${REPO_PATH}/.agent-runner/web-url"
 
-if [[ ! -x "$LAUNCHER" ]]; then
-  osascript -e 'display alert "agent-runner" message "Launcher script is missing or not executable." as critical'
+PYTHON_BIN=""
+for candidate in \
+  "${REPO_PATH}/.venv/bin/python" \
+  "${REPO_PATH}/.venv/bin/python3" \
+  "$(command -v python3 || true)"; do
+  if [[ -n "${candidate}" && -x "${candidate}" ]]; then
+    PYTHON_BIN="${candidate}"
+    break
+  fi
+done
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+  osascript -e 'display alert "Alcove" message "Could not find a usable Python interpreter." as critical'
   exit 1
 fi
 
 cd "$REPO_PATH"
-exec /bin/bash "$LAUNCHER"
+LAUNCHER="${REPO_PATH}/agent-runner.command"
+if [[ ! -x "${LAUNCHER}" ]]; then
+  osascript -e 'display alert "Alcove" message "Launcher script is missing or not executable." as critical'
+  exit 1
+fi
+
+export AGENT_RUNNER_PYTHON="${PYTHON_BIN}"
+export AGENT_RUNNER_URL="${APP_URL}"
+export AGENT_RUNNER_WEB_HOST="${WEB_HOST}"
+export AGENT_RUNNER_WEB_PORT="${WEB_PORT}"
+export AGENT_RUNNER_WEB_PASSWORD="${WEB_PASSWORD}"
+exec /bin/bash "${LAUNCHER}"
 LAUNCHER
-chmod +x "${APP_MACOS}/agent-runner"
+chmod +x "${APP_MACOS}/Alcove"
 
 TMP_DIR="$(mktemp -d)"
-ICON_PNG="${TMP_DIR}/agent-runner-1024.png"
-ICONSET_DIR="${TMP_DIR}/agent-runner.iconset"
-ICON_FILE="${APP_RESOURCES}/agent-runner.icns"
+ICON_PNG="${TMP_DIR}/alcove-1024.png"
+ICONSET_DIR="${TMP_DIR}/alcove.iconset"
+ICON_FILE="${APP_RESOURCES}/Alcove.icns"
 
 build_icon() {
 swift - "$ICON_PNG" "$EMOJI_ICON" <<'SWIFT'

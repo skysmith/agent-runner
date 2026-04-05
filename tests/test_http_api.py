@@ -53,6 +53,8 @@ def test_api_lists_workspaces_and_posts_message(tmp_path: Path) -> None:
         assert workspaces["workspaces"][0]["id"] == "workspace-1"
         server_info = _get_json(f"{base}/api/server-info")
         assert server_info["localhost_url"].startswith("http://127.0.0.1:")
+        assert server_info["server_kind"] == "agent_runner_web"
+        assert server_info["repo_path"] == str(tmp_path.resolve())
 
         response = _post_json(
             f"{base}/api/conversations/{created['id']}/messages",
@@ -101,8 +103,9 @@ def test_root_route_renders_desktop_web_app(tmp_path: Path) -> None:
         _start(server)
         base = f"http://127.0.0.1:{server.server_port}"
         response = urllib.request.urlopen(base).read().decode("utf-8")
-        assert "agent-runner chats" in response
-        assert "Defined workspaces, one active chat per workspace" in response
+        assert "<!doctype html>" in response.lower()
+        assert "settings-modal" in response
+        assert "menu-button" in response
         assert "/api/conversations" in response
         assert "build-badge" in response
     finally:
@@ -136,6 +139,153 @@ def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> N
         )
         assert isinstance(active["repositories"], list)
         assert any(item["repo_path"] == str(repo) for item in active["repositories"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_studio_game_endpoints_create_preview_and_publish(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        created = _post_json(
+            f"{base}/api/studio/games",
+            {
+                "game_title": "Moon Mango Jump",
+                "template_kind": "platformer",
+                "theme_prompt": "A playful moonlit jungle.",
+            },
+        )
+        workspace = created["workspace"]
+        assert workspace["workspace_kind"] == "studio_game"
+        studio = _get_json(f"{base}/api/workspaces/{workspace['id']}/studio")
+        assert studio["workspace"]["template_kind"] == "platformer"
+        preview_html = urllib.request.urlopen(f"{base}{workspace['preview_url']}").read().decode("utf-8")
+        assert "Alcove Studio" in preview_html
+        published = _post_json(f"{base}/api/workspaces/{workspace['id']}/studio/publish", {})
+        assert published["publish_state"] == "published"
+        public_html = urllib.request.urlopen(f"{base}{published['publish_url']}").read().decode("utf-8")
+        assert "Moon Mango Jump" in public_html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_generic_studio_endpoints_create_web_data_and_docs_workspaces(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        web = _post_json(
+            f"{base}/api/studio/workspaces",
+            {
+                "workspace_kind": "studio_web",
+                "artifact_title": "Northstar Site",
+                "template_kind": "landing-page",
+                "theme_prompt": "A calm premium launch page.",
+            },
+        )["workspace"]
+        assert web["workspace_kind"] == "studio_web"
+        assert web["artifact_title"] == "Northstar Site"
+        web_html = urllib.request.urlopen(f"{base}{web['preview_url']}").read().decode("utf-8")
+        assert "Game Studio" not in web_html
+        assert "Web Studio" in web_html
+
+        data = _post_json(
+            f"{base}/api/studio/workspaces",
+            {
+                "workspace_kind": "studio_data",
+                "artifact_title": "Revenue Atlas",
+                "template_kind": "dashboard",
+            },
+        )["workspace"]
+        data_html = urllib.request.urlopen(f"{base}{data['preview_url']}").read().decode("utf-8")
+        assert "Data Studio" in data_html
+
+        docs = _post_json(
+            f"{base}/api/studio/workspaces",
+            {
+                "workspace_kind": "studio_docs",
+                "artifact_title": "Northstar Docs",
+                "template_kind": "docs-site",
+            },
+        )["workspace"]
+        docs_html = urllib.request.urlopen(f"{base}{docs['preview_url']}").read().decode("utf-8")
+        assert "Docs Studio" in docs_html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_rewrites_absolute_dist_asset_paths_for_imported_vite_projects(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    imported_repo = tmp_path / "gnome-roundup"
+    dist = imported_repo / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><script type="module" src="/assets/app.js"></script><link rel="stylesheet" href="/assets/app.css">',
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    (assets / "app.css").write_text("body{}", encoding="utf-8")
+
+    service = _make_service(tmp_path)
+    service.define_workspace(
+        "gnome-roundup",
+        display_name="Gnome Roundup",
+        repo_path=str(imported_repo),
+        workspace_kind="studio_game",
+        artifact_title="Gnome Roundup",
+        template_kind="phaser-vite",
+        preview_url="/studio/preview/gnome-roundup/dist/index.html",
+        preview_state="ready",
+        publish_state="draft",
+    )
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        preview_html = urllib.request.urlopen(f"{base}/studio/preview/gnome-roundup/dist/index.html").read().decode("utf-8")
+        assert 'src="./assets/app.js"' in preview_html
+        assert 'href="./assets/app.css"' in preview_html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        settings = _get_json(f"{base}/api/settings")
+        assert settings["provider"] in {"codex", "ollama"}
+        updated = _patch_json(
+            f"{base}/api/settings",
+            {
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "planner_model": "qwen2.5:7b",
+                "builder_model": "qwen2.5-coder:7b",
+                "reviewer_model": "llama3.1:8b",
+                "max_step_retries": 3,
+                "phase_timeout_seconds": 180,
+            },
+        )
+        assert updated["provider"] == "ollama"
+        assert updated["model"] == "llama3.1:8b"
+        assert updated["planner_model"] == "qwen2.5:7b"
+        models = _get_json(f"{base}/api/providers/ollama/models")
+        assert "available" in models and "models" in models and "message" in models
     finally:
         server.shutdown()
         server.server_close()
@@ -322,6 +472,7 @@ def test_password_protected_server_requires_basic_auth(tmp_path: Path) -> None:
         with urllib.request.urlopen(req) as response:
             payload = json.loads(response.read().decode("utf-8"))
         assert payload["build_label"] == "1"
+        assert payload["server_kind"] == "agent_runner_web"
     finally:
         server.shutdown()
         server.server_close()
@@ -337,6 +488,56 @@ def test_server_info_includes_local_token_when_repo_dirty(tmp_path: Path) -> Non
         base = f"http://127.0.0.1:{server.server_port}"
         payload = _get_json(f"{base}/api/server-info")
         assert len(payload["build_label"]) == 3
+        assert payload["repo_name"] == tmp_path.name
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = _get_json(f"{base}/api/connections")
+        assert payload["local_url"].startswith("http://127.0.0.1:")
+        assert payload["phone_enabled"] is False
+        assert payload["phone_url"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_phone_qr_endpoint_returns_svg_when_tailscale_phone_url_available(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(
+        "agent_runner.http_api.server_info",
+        lambda host, port, repo_path=None, build_label=None: {
+            "server_kind": "agent_runner_web",
+            "bind_host": host,
+            "bind_port": port,
+            "localhost_url": f"http://127.0.0.1:{port}",
+            "lan_url": None,
+            "tailscale_url": f"http://demo-tailnet.ts.net:{port}",
+            "localhost_only": False,
+            "reachable_urls": [f"http://127.0.0.1:{port}", f"http://demo-tailnet.ts.net:{port}"],
+            "repo_path": str(repo_path) if repo_path is not None else None,
+            "repo_name": tmp_path.name,
+            "build_label": build_label,
+        },
+    )
+    server = create_server(service, "0.0.0.0", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(f"{base}/api/connections/phone-qr.svg") as response:
+            body = response.read().decode("utf-8")
+            content_type = response.headers["Content-Type"]
+        assert "image/svg+xml" in content_type
+        assert "<svg" in body
     finally:
         server.shutdown()
         server.server_close()
@@ -462,6 +663,17 @@ def _post_json(url: str, payload: dict) -> dict:
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _patch_json(url: str, payload: dict) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
     )
     with urllib.request.urlopen(request) as response:
         return json.loads(response.read().decode("utf-8"))

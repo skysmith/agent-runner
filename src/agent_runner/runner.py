@@ -35,6 +35,9 @@ class RunnerConfig:
     codex_bin: str = "codex"
     provider: ProviderKind = ProviderKind.CODEX
     model: str = "gpt-5.3-codex"
+    planner_model: str | None = None
+    builder_model: str | None = None
+    reviewer_model: str | None = None
     ollama_host: str = "http://127.0.0.1:11434"
     extra_access_dir: Path | None = None
     max_step_retries: int = 2
@@ -57,6 +60,13 @@ class AgentRunner:
         self._log(f"Starting run in repo: {self.config.repo_path}")
         self._log(f"Using provider: {self.config.provider}")
         self._log(f"Using model: {self.config.model}")
+        if self.config.planner_model or self.config.builder_model or self.config.reviewer_model:
+            self._log(
+                "Phase models: "
+                f"planner={self._phase_model('planner')}, "
+                f"builder={self._phase_model('builder')}, "
+                f"reviewer={self._phase_model('reviewer')}"
+            )
         mind_map_text = load_mind_map(self.config.repo_path)
         if self.config.extra_access_dir:
             self._log(f"Extra access dir: {self.config.extra_access_dir}")
@@ -83,7 +93,7 @@ class AgentRunner:
             ExecutionRequest(
                 provider=self.config.provider,
                 codex_bin=self.config.codex_bin,
-                model=self.config.model,
+                model=self._phase_model("planner"),
                 prompt=planner_prompt(
                     task,
                     mind_map_text=mind_map_text,
@@ -133,7 +143,7 @@ class AgentRunner:
                     ExecutionRequest(
                         provider=self.config.provider,
                         codex_bin=self.config.codex_bin,
-                        model=self.config.model,
+                        model=self._phase_model("builder"),
                         prompt=builder_prompt(
                             task,
                             step,
@@ -195,7 +205,7 @@ class AgentRunner:
                     ExecutionRequest(
                         provider=self.config.provider,
                         codex_bin=self.config.codex_bin,
-                        model=self.config.model,
+                        model=self._phase_model("reviewer"),
                         prompt=reviewer_prompt(
                             task,
                             step,
@@ -339,3 +349,12 @@ class AgentRunner:
         if guidance:
             return guidance
         return "Step failed after retries."
+
+    def _phase_model(self, phase: str) -> str:
+        if phase == "planner" and self.config.planner_model:
+            return self.config.planner_model
+        if phase == "builder" and self.config.builder_model:
+            return self.config.builder_model
+        if phase == "reviewer" and self.config.reviewer_model:
+            return self.config.reviewer_model
+        return self.config.model

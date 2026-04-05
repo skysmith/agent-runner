@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/packaging/agent-runner.spec"
 DIST_DIR="${SCRIPT_DIR}/dist"
 BUILD_DIR="${SCRIPT_DIR}/build/pyinstaller"
-APP_BUNDLE="${DIST_DIR}/agent-runner.app"
+APP_BUNDLE="${DIST_DIR}/Alcove.app"
 
 PYTHON_BIN="${AGENT_RUNNER_PYTHON:-$(command -v python3 || true)}"
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-  echo "python3 is required to package agent-runner." >&2
+  echo "python3 is required to package Alcove." >&2
   exit 1
 fi
 

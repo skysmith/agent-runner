@@ -3,97 +3,122 @@
 Updated: April 5, 2026  
 Repo: `/Users/sky/Documents/codex/agent-runner`
 
-## Current Position
+## Current position
 
-This checkpoint captures where Alcove work stopped in the roadmap and what should happen next.
+This checkpoint now sits inside a broader Alcove product story.
 
-## Completed In This Slice
+Alcove is no longer just “the finance drawer roadmap” or “a browser-first Codex runner.” It is becoming a platform with:
 
-1. Branding and naming
-- Renamed the roadmap doc to `docs/alcove.rtf`.
-- Updated dashboard header and companion labels to `Alcove`.
-- Updated browser tab titles to `Alcove` and `Alcove Companion`.
+- **Finance Drawer**
+  the embedded, page-aware assistant surface
+- **Studio modes**
+  artifact-driven workspaces such as Game Studio, Web Studio, Data Studio, and Docs Studio
 
-2. Capability model groundwork
-- Added conversation-level capability mode:
+The new source of truth for that product direction is:
+
+- `docs/alcove-unified-studio-roadmap.md`
+
+The older `docs/alcove.rtf` roadmap still matters, but it should now be read as the Finance Drawer branch inside the larger Alcove platform.
+
+## Completed in this slice
+
+### 1. Naming and product direction groundwork
+
+- Updated product language around `Alcove`
+- Established browser-first Alcove surface as the primary runtime
+- Introduced the idea that workspace is the durable unit of context and execution
+
+### 2. Capability model groundwork
+
+- Added conversation-level capability modes:
   - `ask`
   - `ops`
   - `dev`
-- Added backend guardrail so `loop` mode is only allowed in `dev` capability mode.
-- Added UI controls for switching capability mode in the main dashboard composer.
+- Added guardrail so `loop` mode is only allowed in `dev`
+- Added UI controls for switching capability mode in the main composer
 
-3. Structured page context model
-- Added persistent conversation-level `page_context` storage.
-- Added normalization/adapter pipeline in backend:
+### 3. Structured page context model
+
+- Added persistent conversation-level `page_context` storage
+- Added normalization/adapter pipeline for:
   - `inventory`
   - `cashflow`
   - `payouts`
   - fallback `generic`
-- Added context endpoint support:
+- Added context endpoints:
   - `GET /api/conversations/{id}/context`
   - `PATCH /api/conversations/{id}/context`
 
-4. Auto-population hooks in dashboard
+### 4. Auto-population and active-context UX
+
 - Added context input fields near the composer:
   - route
   - entity
   - date window
   - filters
   - visible columns
-- Added URL-seeded context support:
-  - `ctx_route`
-  - `ctx_entity`
-  - `ctx_filters`
-  - `ctx_columns`
-  - `ctx_date_window`
-- Added workspace-name route inference for:
-  - inventory
-  - cash-flow
-  - payouts
-- Added automatic context persistence on field blur.
-- Added automatic context inclusion on send (JSON + multipart paths).
+- Added URL-seeded context support
+- Added automatic context persistence on blur
+- Added automatic context inclusion on send
+- Added live `Active context` summary chip near the composer
 
-5. Active Context UI
-- Added a live `Active context` summary chip near composer.
-- Chip updates live from context fields and on inferred/persisted context load.
+### 5. Studio platform beginning
 
-## Verification Status
+- Added the first Alcove Studio workspace type:
+  - `studio_game`
+- Added managed preview and publish/share URLs for Studio game workspaces
+- Proved that the workspace + preview + publish pattern can live inside the existing Alcove shell
 
-Targeted verification completed for this slice:
+## Verification status
+
+Targeted verification completed for the current implemented slices:
 
 - `pytest -q tests/test_page_context.py tests/test_service.py tests/test_http_api.py`
 - `python3 -m compileall -q src`
 
-## Roadmap Mapping
+## Roadmap mapping
 
-From the Alcove roadmap, this work advances:
+From the unified roadmap, current work advances:
 
-- Phase 1: product boundary groundwork (capability levels introduced)
-- Phase 2: shared service contract (API contract for context/mode)
-- Phase 3: page-aware context model (initial adapters + structured context)
-- Phase 4: ask-mode experience support (safe defaults + contextual UX)
+- Finance Drawer:
+  - product boundary groundwork
+  - shared service contract
+  - page-aware context model
+  - ask-mode UX support
+- Studio Platform:
+  - first workspace-kind implementation
+  - preview/publish metadata pattern
+  - first artifact-visible studio proof via Game Studio
 
-Partial progress has also started toward Phase 10 (UI refinement) via context visibility and Alcove branding.
+## Recommended next slice
 
-## Recommended Next Slice
+### 1. Finance Drawer completion
 
-1. Expand page adapters and schemas
-- Add richer typed adapters for each finance view with stable keys per page.
-- Add strict validation and size limits for `page_context` payloads.
+- expand typed page adapters
+- improve ask-mode explanation quality
+- add stricter validation and limits for page context
+- define initial ops allowlist
+- add explicit handoff into full Alcove workspace flows
 
-2. Ask mode quality improvements
-- Render source/citation hints in answers when context-driven claims are made.
-- Improve explainability for metric origin and period comparisons.
+### 2. Web Studio definition
 
-3. Ops mode boundary implementation
-- Introduce explicit allowlisted operational workflows with confirmations.
-- Keep production write actions disabled by default.
+- define `studio_web` product contract
+- reuse preview/publish shell from Game Studio
+- decide the first template/import model for live web previews
 
-4. Dev bridge scaffolding
-- Add explicit handoff action to open/export a task into full `agent-runner`.
-- Keep direct repo mutation in embedded surface gated and intentional.
+### 3. Shared Studio Platform extraction
+
+- unify workspace-kind metadata rules
+- standardize preview/publish/export contracts
+- standardize child-friendly/simple-mode vs advanced-mode presentation rules
+
+### 4. Data Studio contract
+
+- define read-only first experience
+- define derived-view and export rules
+- define trust cues for source vs transformed output
 
 ## Notes
 
-- The repository currently contains additional in-flight files beyond this Alcove slice.
-- This checkpoint is intended to make the Alcove progress and next steps unambiguous before continuing implementation.
+- The repository contains in-flight implementation work beyond the original Finance Drawer roadmap.
+- This checkpoint is intended to keep the product direction unambiguous while Finance Drawer and Studio work proceed in parallel.

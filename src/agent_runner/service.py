@@ -14,10 +14,21 @@ from .context_assembler import ContextAssembler
 from .conversation_store import ConversationStore, WorkspaceConversationController
 from .models import AssistantCapabilityMode, AppSettings, ChecksPolicy, ConversationRecord, ProviderKind, RunMode
 from .page_context import normalize_page_context
-from .providers import ExecutionRequest, PhaseExecutionClient, ProviderRouter
+from .providers import ExecutionRequest, PhaseExecutionClient, ProviderRouter, probe_ollama
 from .run_coordinator import RunCoordinator, RunStatus
 from .runner import AgentRunner, RunnerConfig
-from .settings_store import load_app_settings
+from .settings_store import load_app_settings, save_app_settings
+from .studio import (
+    create_studio_project,
+    normalize_template_kind,
+    normalize_workspace_kind,
+    publish_studio_project,
+    slugify_workspace_id,
+    studio_actions,
+    studio_placeholder,
+    studio_summary_prompt,
+    studio_welcome_message,
+)
 
 ServiceEventCallback = Callable[[str, str], None]
 
@@ -77,33 +88,13 @@ class AgentRunnerService:
             for path in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name):
                 controller = WorkspaceConversationController(self.conversation_store, path.name)
                 active = controller.active_conversation()
-                display_name = controller.state.display_name or path.name
-                workspaces.append(
-                    {
-                        "id": path.name,
-                        "display_name": display_name,
-                        "repo_path": controller.state.repo_path,
-                        "active_conversation_id": controller.state.active_conversation_id,
-                        "conversation_count": len(controller.state.conversation_ids),
-                        "updated_at": active.updated_at,
-                        "title": active.title,
-                    }
-                )
+                workspaces.append(self._workspace_payload(controller, updated_at=active.updated_at, title=active.title))
         return workspaces
 
     def ensure_workspace(self, workspace_id: str) -> dict[str, object]:
         controller = self._controller(workspace_id)
         active = controller.active_conversation()
-        display_name = controller.state.display_name or workspace_id
-        return {
-            "id": workspace_id,
-            "display_name": display_name,
-            "repo_path": controller.state.repo_path,
-            "active_conversation_id": controller.state.active_conversation_id,
-            "conversation_count": len(controller.state.conversation_ids),
-            "conversations_panel_collapsed": controller.state.conversations_panel_collapsed,
-            "updated_at": active.updated_at,
-        }
+        return self._workspace_payload(controller, updated_at=active.updated_at)
 
     def list_conversations(self, workspace_id: str) -> list[dict[str, object]]:
         controller = self._controller(workspace_id)
@@ -143,15 +134,176 @@ class AgentRunnerService:
     def create_web_conversation(self, *, title: str | None = None) -> dict[str, object]:
         return self.create_conversation(self.DEFAULT_WEB_WORKSPACE_ID, title=title)
 
+    def create_studio_game(
+        self,
+        *,
+        game_title: str,
+        template_kind: str,
+        theme_prompt: str | None = None,
+    ) -> dict[str, object]:
+        return self.create_studio_workspace(
+            workspace_kind="studio_game",
+            artifact_title=game_title,
+            template_kind=template_kind,
+            theme_prompt=theme_prompt,
+        )
+
+    def create_studio_workspace(
+        self,
+        *,
+        workspace_kind: str,
+        artifact_title: str,
+        template_kind: str,
+        theme_prompt: str | None = None,
+    ) -> dict[str, object]:
+        kind = normalize_workspace_kind(workspace_kind)
+        title = artifact_title.strip() or "New Studio"
+        workspace_id = self._unique_workspace_id(title)
+        project = create_studio_project(
+            root=self._studio_projects_root(),
+            workspace_id=workspace_id,
+            workspace_kind=kind,
+            artifact_title=title,
+            template_kind=normalize_template_kind(kind, template_kind),
+            theme_prompt=theme_prompt,
+        )
+        preview_url = f"/studio/preview/{workspace_id}/index.html"
+        controller = self._controller(workspace_id)
+        controller.set_workspace_profile(
+            display_name=project.artifact_title,
+            repo_path=str(project.repo_path),
+            workspace_kind=project.workspace_kind,
+            artifact_title=project.artifact_title,
+            template_kind=project.template_kind,
+            theme_prompt=project.theme_prompt,
+            preview_url=preview_url,
+            preview_state="ready",
+            publish_state="draft",
+        )
+        record = controller.active_conversation()
+        controller.rename_conversation(record.id, f"{project.artifact_title} Studio")
+        controller.set_assistant_context(record.id, assistant_mode=AssistantCapabilityMode.DEV)
+        controller.append_message(
+            role="assistant",
+            content=studio_welcome_message(project),
+            phase="message",
+        )
+        self._emit_event(
+            "workspace.created",
+            {
+                "workspace_id": workspace_id,
+                "workspace_kind": project.workspace_kind,
+                "artifact_title": project.artifact_title,
+                "template_kind": project.template_kind,
+            },
+        )
+        workspace = self.ensure_workspace(workspace_id)
+        conversation = self.get_conversation(str(workspace["active_conversation_id"]), workspace_id=workspace_id)
+        return {
+            "workspace": workspace,
+            "conversation": conversation,
+        }
+
+    def get_studio_workspace(self, workspace_id: str) -> dict[str, object]:
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            raise ValueError("Workspace is not an Alcove Studio workspace.")
+        conversation = self.get_conversation(str(controller.state.active_conversation_id), workspace_id=workspace_id)
+        return {
+            "workspace": self.ensure_workspace(workspace_id),
+            "conversation": conversation,
+            "actions": studio_actions(controller.state.workspace_kind),
+            "advanced": {
+                "repo_path": controller.state.repo_path,
+                "workspace_id": workspace_id,
+                "workspace_kind": controller.state.workspace_kind,
+                "template_kind": controller.state.template_kind,
+            },
+        }
+
+    def refresh_studio_preview(self, workspace_id: str) -> dict[str, object]:
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            raise ValueError("Workspace is not an Alcove Studio workspace.")
+        repo_path = self._workspace_repo_path(workspace_id)
+        self._prepare_studio_preview(workspace_id, repo_path)
+        preview_relative_path = self._studio_entry_relative_path(workspace_id)
+        preview_state = "ready" if (repo_path / preview_relative_path).exists() else "error"
+        controller.set_workspace_profile(
+            preview_url=f"/studio/preview/{workspace_id}/{preview_relative_path}",
+            preview_state=preview_state,
+        )
+        payload = self.ensure_workspace(workspace_id)
+        self._emit_event(
+            "workspace.updated",
+            {
+                "workspace_id": workspace_id,
+                "preview_state": preview_state,
+                "preview_url": payload.get("preview_url"),
+            },
+        )
+        return payload
+
+    def publish_studio_game(self, workspace_id: str) -> dict[str, object]:
+        return self.publish_studio_workspace(workspace_id)
+
+    def publish_studio_workspace(self, workspace_id: str) -> dict[str, object]:
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            raise ValueError("Workspace is not an Alcove Studio workspace.")
+        repo_path = self._workspace_repo_path(workspace_id)
+        slug = controller.state.publish_slug or slugify_workspace_id(controller.state.artifact_title or workspace_id)
+        preview_relative_path = self._studio_entry_relative_path(workspace_id)
+        publish_studio_project(source_repo=repo_path, publish_root=self._published_games_root(), publish_slug=slug)
+        publish_url = f"/play/{slug}/{preview_relative_path}"
+        controller.set_workspace_profile(
+            publish_slug=slug,
+            publish_url=publish_url,
+            publish_state="published",
+        )
+        payload = self.ensure_workspace(workspace_id)
+        self._emit_event(
+            "workspace.updated",
+            {
+                "workspace_id": workspace_id,
+                "publish_state": "published",
+                "publish_url": publish_url,
+            },
+        )
+        return payload
+
     def define_workspace(
         self,
         workspace_id: str,
         *,
         display_name: str | None = None,
         repo_path: str | None = None,
+        workspace_kind: str | None = None,
+        artifact_title: str | None = None,
+        template_kind: str | None = None,
+        game_title: str | None = None,
+        theme_prompt: str | None = None,
+        preview_url: str | None = None,
+        preview_state: str | None = None,
+        publish_url: str | None = None,
+        publish_state: str | None = None,
+        publish_slug: str | None = None,
     ) -> dict[str, object]:
         controller = self._controller(workspace_id)
-        controller.set_workspace_profile(display_name=display_name, repo_path=repo_path)
+        controller.set_workspace_profile(
+            display_name=display_name,
+            repo_path=repo_path,
+            workspace_kind=workspace_kind,
+            artifact_title=artifact_title,
+            template_kind=template_kind,
+            game_title=game_title,
+            theme_prompt=theme_prompt,
+            preview_url=preview_url,
+            preview_state=preview_state,
+            publish_url=publish_url,
+            publish_state=publish_state,
+            publish_slug=publish_slug,
+        )
         active = controller.active_conversation()
         self._emit_event(
             "workspace.updated",
@@ -160,6 +312,7 @@ class AgentRunnerService:
                 "display_name": controller.state.display_name or workspace_id,
                 "repo_path": controller.state.repo_path,
                 "active_conversation_id": active.id,
+                "workspace_kind": controller.state.workspace_kind,
             },
         )
         return self.ensure_workspace(workspace_id)
@@ -404,6 +557,53 @@ class AgentRunnerService:
     def get_run_status(self) -> dict[str, object]:
         return self.coordinator.get_status().to_dict()
 
+    def get_settings(self) -> dict[str, object]:
+        settings = self.app_settings
+        return {
+            "provider": str(settings.provider),
+            "model": settings.model,
+            "planner_model": settings.planner_model,
+            "builder_model": settings.builder_model,
+            "reviewer_model": settings.reviewer_model,
+            "ollama_host": settings.ollama_host,
+            "max_step_retries": settings.max_step_retries,
+            "phase_timeout_seconds": settings.phase_timeout_seconds,
+        }
+
+    def update_settings(self, payload: dict[str, object]) -> dict[str, object]:
+        settings = self.app_settings
+        provider_text = str(payload.get("provider", settings.provider)).strip().lower()
+        if provider_text == str(ProviderKind.OLLAMA):
+            settings.provider = ProviderKind.OLLAMA
+        elif provider_text == str(ProviderKind.CODEX):
+            settings.provider = ProviderKind.CODEX
+        model = str(payload.get("model", settings.model)).strip()
+        if model:
+            settings.model = model
+        settings.planner_model = _optional_text(payload.get("planner_model"), settings.planner_model)
+        settings.builder_model = _optional_text(payload.get("builder_model"), settings.builder_model)
+        settings.reviewer_model = _optional_text(payload.get("reviewer_model"), settings.reviewer_model)
+        ollama_host = str(payload.get("ollama_host", settings.ollama_host)).strip()
+        if ollama_host:
+            settings.ollama_host = ollama_host
+        retries = payload.get("max_step_retries")
+        if retries is not None:
+            settings.max_step_retries = max(0, int(retries))
+        timeout = payload.get("phase_timeout_seconds")
+        if timeout is not None:
+            settings.phase_timeout_seconds = max(30, int(timeout))
+        save_app_settings(self.config.settings_path, settings)
+        return self.get_settings()
+
+    def list_ollama_models(self) -> dict[str, object]:
+        result = probe_ollama(self.app_settings.ollama_host)
+        return {
+            "available": result.available,
+            "models": result.models,
+            "message": result.message,
+            "host": self.app_settings.ollama_host,
+        }
+
     def get_review_snapshot(
         self,
         *,
@@ -525,6 +725,9 @@ class AgentRunnerService:
                 codex_bin=global_settings.codex_bin,
                 provider=provider,
                 model=model,
+                planner_model=global_settings.planner_model,
+                builder_model=global_settings.builder_model,
+                reviewer_model=global_settings.reviewer_model,
                 ollama_host=global_settings.ollama_host,
                 extra_access_dir=global_settings.extra_access_dir,
                 max_step_retries=max(0, max_step_retries if max_step_retries is not None else global_settings.max_step_retries),
@@ -545,6 +748,7 @@ class AgentRunnerService:
                 artifacts_dir=str(runner.store.run_dir),
                 build_number=runner.store.build_number,
             )
+            self._refresh_preview_after_run(workspace_id)
             self.coordinator.update_status(
                 state="succeeded" if outcome.ok else "failed",
                 step="Complete" if outcome.ok else "Needs attention",
@@ -625,6 +829,7 @@ class AgentRunnerService:
             text=f"Message response received.\n\n{message}" if message else "Message response received.",
             phase="message",
         )
+        self._refresh_preview_after_run(workspace_id)
         self.coordinator.update_status(
             state="succeeded",
             step="Complete",
@@ -742,6 +947,26 @@ class AgentRunnerService:
     ) -> tuple[ProviderKind, str]:
         return provider or self.app_settings.provider, model or self.app_settings.model
 
+    def _refresh_preview_after_run(self, workspace_id: str) -> None:
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            return
+        repo_path = self._workspace_repo_path(workspace_id)
+        preview_relative_path = self._studio_entry_relative_path(workspace_id)
+        preview_state = "ready" if (repo_path / preview_relative_path).exists() else "error"
+        controller.set_workspace_profile(
+            preview_url=f"/studio/preview/{workspace_id}/{preview_relative_path}",
+            preview_state=preview_state,
+        )
+        self._emit_event(
+            "workspace.updated",
+            {
+                "workspace_id": workspace_id,
+                "preview_url": controller.state.preview_url,
+                "preview_state": controller.state.preview_state,
+            },
+        )
+
     def _workspace_repo_path(self, workspace_id: str) -> Path:
         controller = self._controller(workspace_id)
         configured = (controller.state.repo_path or "").strip()
@@ -790,6 +1015,77 @@ class AgentRunnerService:
 
     def _controller(self, workspace_id: str) -> WorkspaceConversationController:
         return WorkspaceConversationController(self.conversation_store, workspace_id)
+
+    def studio_preview_file(self, workspace_id: str, relative_path: str) -> Path:
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            raise ValueError("Workspace is not an Alcove Studio workspace.")
+        repo_path = self._workspace_repo_path(workspace_id).resolve()
+        candidate = (repo_path / relative_path).resolve()
+        if candidate != repo_path and repo_path not in candidate.parents:
+            raise ValueError("Invalid preview path.")
+        if not candidate.exists() or not candidate.is_file():
+            raise FileNotFoundError(relative_path)
+        return candidate
+
+    def published_game_file(self, publish_slug: str, relative_path: str) -> Path:
+        root = self._published_games_root().resolve()
+        game_root = (root / publish_slug).resolve()
+        candidate = (game_root / relative_path).resolve()
+        if game_root != root and root not in game_root.parents:
+            raise ValueError("Invalid publish path.")
+        if candidate != game_root and game_root not in candidate.parents:
+            raise ValueError("Invalid publish path.")
+        if not candidate.exists() or not candidate.is_file():
+            raise FileNotFoundError(relative_path)
+        return candidate
+
+    def _is_studio_workspace_kind(self, workspace_kind: str | None) -> bool:
+        return str(workspace_kind or "").startswith("studio_")
+
+    def _studio_entry_relative_path(self, workspace_id: str) -> str:
+        controller = self._controller(workspace_id)
+        preview_url = str(controller.state.preview_url or "").strip()
+        prefix = f"/studio/preview/{workspace_id}/"
+        if preview_url.startswith(prefix):
+            relative = preview_url[len(prefix):].strip().lstrip("/")
+            if relative:
+                return relative
+        return "index.html"
+
+    def _prepare_studio_preview(self, workspace_id: str, repo_path: Path) -> None:
+        preview_relative_path = self._studio_entry_relative_path(workspace_id)
+        package_json_path = repo_path / "package.json"
+        if not package_json_path.exists():
+            return
+        if not preview_relative_path.startswith("dist/"):
+            return
+        scripts = self._package_scripts(package_json_path)
+        build_script = str(scripts.get("build") or "").strip()
+        if not build_script:
+            return
+        result = subprocess.run(
+            ["npm", "run", "build"],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "Build failed").strip()
+            raise ValueError(f"Could not build Studio preview: {detail}")
+
+    def _package_scripts(self, package_json_path: Path) -> dict[str, object]:
+        try:
+            payload = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        scripts = payload.get("scripts")
+        if not isinstance(scripts, dict):
+            return {}
+        return {str(key): value for key, value in scripts.items()}
 
     def _find_conversation(
         self,
@@ -840,6 +1136,7 @@ class AgentRunnerService:
             "page_context": dict(record.page_context),
             "summary": record.summary,
             "preview": self._conversation_preview(record),
+            "workspace_kind": workspace.get("workspace_kind", "standard"),
         }
         if include_messages:
             payload["messages"] = [asdict(message) for message in record.messages]
@@ -859,6 +1156,54 @@ class AgentRunnerService:
             return "No preview available."
         preview = f"You: {content}" if latest.role == "user" else content
         return preview[:96].rstrip() + ("…" if len(preview) > 96 else "")
+
+    def _workspace_payload(
+        self,
+        controller: WorkspaceConversationController,
+        *,
+        updated_at: str,
+        title: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "id": controller.workspace_id,
+            "display_name": controller.state.display_name or controller.workspace_id,
+            "repo_path": controller.state.repo_path,
+            "active_conversation_id": controller.state.active_conversation_id,
+            "conversation_count": len(controller.state.conversation_ids),
+            "conversations_panel_collapsed": controller.state.conversations_panel_collapsed,
+            "updated_at": updated_at,
+            "title": title,
+            "workspace_kind": controller.state.workspace_kind,
+            "artifact_title": controller.state.artifact_title or controller.state.game_title,
+            "template_kind": controller.state.template_kind,
+            "game_title": controller.state.artifact_title or controller.state.game_title,
+            "theme_prompt": controller.state.theme_prompt,
+            "preview_url": controller.state.preview_url,
+            "preview_state": controller.state.preview_state,
+            "publish_url": controller.state.publish_url,
+            "publish_state": controller.state.publish_state,
+            "publish_slug": controller.state.publish_slug,
+        }
+
+    def _studio_projects_root(self) -> Path:
+        root = self.config.settings_path.parent / "studio-projects"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _published_games_root(self) -> Path:
+        root = self.config.settings_path.parent / "studio-published"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _unique_workspace_id(self, title: str) -> str:
+        base = slugify_workspace_id(title)
+        candidate = base
+        existing = {str(item["id"]) for item in self.list_workspaces()}
+        index = 2
+        while candidate in existing:
+            candidate = f"{base}-{index}"
+            index += 1
+        return candidate
 
     def _emit_run_event(self, event_type: str, *, status: dict[str, object] | None = None) -> None:
         payload = {
@@ -959,6 +1304,13 @@ def _parse_cursor(cursor: str | None) -> int:
     return max(0, value)
 
 
+def _optional_text(value: object, fallback: str | None = None) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return fallback
+
+
 def _repo_activity_metadata(repo_path: Path) -> dict[str, object] | None:
     try:
         last_commit_ts = _git_text(repo_path, ["log", "-1", "--format=%ct"])
@@ -1023,7 +1375,4 @@ def _is_hidden_relative(path: Path, root: Path) -> bool:
 
 
 def _slugify_workspace_id(raw: str) -> str:
-    text = raw.strip().lower()
-    cleaned = re.sub(r"[^a-z0-9._-]+", "-", text)
-    cleaned = cleaned.strip("-")
-    return cleaned or AgentRunnerService.DEFAULT_WEB_WORKSPACE_ID
+    return slugify_workspace_id(raw) or AgentRunnerService.DEFAULT_WEB_WORKSPACE_ID

@@ -61,11 +61,27 @@ def test_workspace_profile_round_trip(tmp_path: Path) -> None:
     controller.set_workspace_profile(
         display_name="Clementine Kids",
         repo_path="/Users/sky/Documents/codex/business/clementine-kids",
+        workspace_kind="studio_game",
+        artifact_title="Moon Mango Jump",
+        template_kind="platformer",
+        game_title="Moon Mango Jump",
+        theme_prompt="A playful moonlit jungle.",
+        preview_url="/studio/preview/moon-mango-jump/index.html",
+        preview_state="ready",
+        publish_url="/play/moon-mango-jump/index.html",
+        publish_state="published",
+        publish_slug="moon-mango-jump",
     )
 
     reloaded = store.load_workspace_state("workspace-1")
     assert reloaded.display_name == "Clementine Kids"
     assert reloaded.repo_path == "/Users/sky/Documents/codex/business/clementine-kids"
+    assert reloaded.workspace_kind == "studio_game"
+    assert reloaded.artifact_title == "Moon Mango Jump"
+    assert reloaded.template_kind == "platformer"
+    assert reloaded.game_title == "Moon Mango Jump"
+    assert reloaded.preview_state == "ready"
+    assert reloaded.publish_slug == "moon-mango-jump"
 
 
 def test_derive_conversation_title_uses_first_non_empty_line() -> None:

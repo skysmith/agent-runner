@@ -104,6 +104,10 @@ def _resolve_codex_command(codex_bin: str) -> list[str]:
     if resolved.suffix == ".js":
         node_bin = shutil.which("node")
         if node_bin:
+            if os.uname().sysname == "Darwin" and os.uname().machine == "arm64":
+                arch_bin = Path("/usr/bin/arch")
+                if arch_bin.exists():
+                    return [str(arch_bin), "-arm64", node_bin, str(resolved)]
             return [node_bin, str(resolved)]
     return [str(discovered)]
 

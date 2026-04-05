@@ -34,6 +34,16 @@ class ConversationStore:
             conversations_panel_collapsed=bool(raw.get("conversations_panel_collapsed", False)),
             display_name=_optional_text(raw.get("display_name")),
             repo_path=_optional_text(raw.get("repo_path")),
+            workspace_kind=_workspace_kind_from_raw(raw.get("workspace_kind")),
+            artifact_title=_optional_text(raw.get("artifact_title")) or _optional_text(raw.get("game_title")),
+            template_kind=_optional_text(raw.get("template_kind")),
+            game_title=_optional_text(raw.get("game_title")),
+            theme_prompt=_optional_text(raw.get("theme_prompt")),
+            preview_url=_optional_text(raw.get("preview_url")),
+            preview_state=_optional_text(raw.get("preview_state")),
+            publish_url=_optional_text(raw.get("publish_url")),
+            publish_state=_optional_text(raw.get("publish_state")),
+            publish_slug=_optional_text(raw.get("publish_slug")),
         )
 
     def save_workspace_state(self, state: WorkspaceSessionState) -> None:
@@ -44,6 +54,16 @@ class ConversationStore:
             "conversations_panel_collapsed": state.conversations_panel_collapsed,
             "display_name": state.display_name,
             "repo_path": state.repo_path,
+            "workspace_kind": state.workspace_kind,
+            "artifact_title": state.artifact_title,
+            "template_kind": state.template_kind,
+            "game_title": state.game_title,
+            "theme_prompt": state.theme_prompt,
+            "preview_url": state.preview_url,
+            "preview_state": state.preview_state,
+            "publish_url": state.publish_url,
+            "publish_state": state.publish_state,
+            "publish_slug": state.publish_slug,
         })
 
     def list_conversations(self, workspace_id: str) -> list[ConversationRecord]:
@@ -167,13 +187,58 @@ class WorkspaceConversationController:
         *,
         display_name: str | None = None,
         repo_path: str | None = None,
+        workspace_kind: str | None = None,
+        artifact_title: str | None = None,
+        template_kind: str | None = None,
+        game_title: str | None = None,
+        theme_prompt: str | None = None,
+        preview_url: str | None = None,
+        preview_state: str | None = None,
+        publish_url: str | None = None,
+        publish_state: str | None = None,
+        publish_slug: str | None = None,
     ) -> WorkspaceSessionState:
-        clean_name = (display_name or "").strip() or None
-        clean_repo_path = (repo_path or "").strip() or None
-        if self.state.display_name == clean_name and self.state.repo_path == clean_repo_path:
+        clean_name = self.state.display_name if display_name is None else ((display_name or "").strip() or None)
+        clean_repo_path = self.state.repo_path if repo_path is None else ((repo_path or "").strip() or None)
+        clean_kind = _workspace_kind_from_raw(workspace_kind if workspace_kind is not None else self.state.workspace_kind)
+        clean_template = self.state.template_kind if template_kind is None else ((template_kind or "").strip() or None)
+        if artifact_title is None and game_title is None:
+            clean_artifact_title = self.state.artifact_title or self.state.game_title
+        else:
+            clean_artifact_title = ((artifact_title or game_title or "").strip() or None)
+        clean_theme = self.state.theme_prompt if theme_prompt is None else ((theme_prompt or "").strip() or None)
+        clean_preview_url = self.state.preview_url if preview_url is None else ((preview_url or "").strip() or None)
+        clean_preview_state = self.state.preview_state if preview_state is None else ((preview_state or "").strip() or None)
+        clean_publish_url = self.state.publish_url if publish_url is None else ((publish_url or "").strip() or None)
+        clean_publish_state = self.state.publish_state if publish_state is None else ((publish_state or "").strip() or None)
+        clean_publish_slug = self.state.publish_slug if publish_slug is None else ((publish_slug or "").strip() or None)
+        if (
+            self.state.display_name == clean_name
+            and self.state.repo_path == clean_repo_path
+            and self.state.workspace_kind == clean_kind
+            and self.state.artifact_title == clean_artifact_title
+            and self.state.template_kind == clean_template
+            and self.state.game_title == clean_artifact_title
+            and self.state.theme_prompt == clean_theme
+            and self.state.preview_url == clean_preview_url
+            and self.state.preview_state == clean_preview_state
+            and self.state.publish_url == clean_publish_url
+            and self.state.publish_state == clean_publish_state
+            and self.state.publish_slug == clean_publish_slug
+        ):
             return self.state
         self.state.display_name = clean_name
         self.state.repo_path = clean_repo_path
+        self.state.workspace_kind = clean_kind
+        self.state.artifact_title = clean_artifact_title
+        self.state.template_kind = clean_template
+        self.state.game_title = clean_artifact_title
+        self.state.theme_prompt = clean_theme
+        self.state.preview_url = clean_preview_url
+        self.state.preview_state = clean_preview_state
+        self.state.publish_url = clean_publish_url
+        self.state.publish_state = clean_publish_state
+        self.state.publish_slug = clean_publish_slug
         self.store.save_workspace_state(self.state)
         return self.state
 
@@ -412,6 +477,11 @@ def _assistant_mode_from_raw(value: object) -> AssistantCapabilityMode:
         return AssistantCapabilityMode(str(value).strip().lower())
     except ValueError:
         return AssistantCapabilityMode.ASK
+
+
+def _workspace_kind_from_raw(value: object) -> str:
+    text = str(value or "standard").strip().lower()
+    return text if text in {"standard", "studio_game", "studio_web", "studio_data", "studio_docs"} else "standard"
 
 
 def _sorted_conversation_ids(records: list[ConversationRecord]) -> list[str]:
