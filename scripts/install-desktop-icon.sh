@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESKTOP_DIR="${HOME}/Desktop"
 APP_NAME="Alcove"
 APP_BUNDLE="${DESKTOP_DIR}/${APP_NAME}.app"
+LEGACY_APP_BUNDLE="${DESKTOP_DIR}/agent-runner.app"
 SOURCE_APP="${SCRIPT_DIR}/build/macos/${APP_NAME}.app"
 
 if [[ ! -d "$DESKTOP_DIR" ]]; then
@@ -25,7 +26,9 @@ if [[ ! -d "$SOURCE_APP" ]]; then
 fi
 
 rm -rf "$APP_BUNDLE"
+rm -rf "$LEGACY_APP_BUNDLE"
 cp -R "$SOURCE_APP" "$APP_BUNDLE"
 touch "$APP_BUNDLE"
 echo "Created desktop launcher: $APP_BUNDLE"
+echo "Removed legacy launcher: $LEGACY_APP_BUNDLE"
 echo "Source app: $SOURCE_APP"

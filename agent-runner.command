@@ -12,9 +12,8 @@ PYTHON_BIN="${AGENT_RUNNER_PYTHON:-}"
 
 if [[ -z "$PYTHON_BIN" ]]; then
   candidates=()
-  if [[ -z "$TERM_PROGRAM_NAME" || -z "$TTY_PATH" || "$TTY_PATH" == "not a tty" ]]; then
-    candidates+=("/Library/Frameworks/Python.framework/Versions/3.11/bin/python3")
-  fi
+  candidates+=("${SCRIPT_DIR}/.venv/bin/python")
+  candidates+=("${SCRIPT_DIR}/.venv/bin/python3")
   candidates+=("$(command -v python3 || true)")
   candidates+=("/Library/Frameworks/Python.framework/Versions/3.11/bin/python3")
   for candidate in "${candidates[@]}"; do
@@ -127,11 +126,11 @@ for _ in $(seq 1 50); do
     exit 0
   fi
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    echo "Failed to start agent-runner UI. See ${LOG_FILE} for details." >&2
+    echo "Failed to start Alcove web runtime. See ${LOG_FILE} for details." >&2
     exit 1
   fi
   sleep 0.1
 done
 
-echo "agent-runner UI did not become healthy on ${APP_URL}. See ${LOG_FILE} for details." >&2
+echo "Alcove web runtime did not become healthy on ${APP_URL}. See ${LOG_FILE} for details." >&2
 exit 1
