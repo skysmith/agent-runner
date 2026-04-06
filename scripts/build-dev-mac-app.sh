@@ -60,7 +60,6 @@ WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
 if [[ -z "${WEB_PASSWORD}" && -f "${PASSWORD_FILE}" ]]; then
   WEB_PASSWORD="$(head -n 1 "${PASSWORD_FILE}" | tr -d '\r')"
 fi
-WEB_PASSWORD="${WEB_PASSWORD:-jungleboogie}"
 APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
 OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
 URL_FILE="${REPO_PATH}/.agent-runner/web-url"

@@ -17,7 +17,7 @@ def main() -> int:
     runtime = resolve_runtime_paths(repo_path=repo_path, artifacts_dir=DEFAULT_ARTIFACTS_DIR)
     host = os.environ.get("AGENT_RUNNER_WEB_HOST", "0.0.0.0").strip() or "0.0.0.0"
     port = int(os.environ.get("AGENT_RUNNER_WEB_PORT", "8765"))
-    password = (os.environ.get("AGENT_RUNNER_WEB_PASSWORD", "jungleboogie").strip() or None)
+    password = (os.environ.get("AGENT_RUNNER_WEB_PASSWORD", "").strip() or None)
 
     service = AgentRunnerService(
         ServiceConfig(

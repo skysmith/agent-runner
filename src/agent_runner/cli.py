@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .app_paths import resolve_runtime_paths
 from .codex_client import CodexError
+from .doctor import render_doctor_report, run_doctor
 from .models import ProviderKind
 from .runner import AgentRunner, RunnerConfig
 from .server_info import server_info
@@ -193,6 +194,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional web access password (basic auth).",
     )
+
+    doctor = sub.add_parser("doctor", help="Check local setup and explain what to fix")
+    doctor.add_argument(
+        "--repo",
+        type=Path,
+        default=Path.cwd(),
+        help="Workspace path to validate (defaults to current directory)",
+    )
+    doctor.add_argument("--codex-bin", default="codex", help="Codex CLI binary")
     return parser
 
 
@@ -328,6 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             server.server_close()
         return 0
+
+    if args.command == "doctor":
+        report = run_doctor(codex_bin=args.codex_bin, repo_path=args.repo)
+        print(render_doctor_report(report))
+        return 0 if report.ok else 1
 
     parser.print_help()
     return 2

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import stat
 import subprocess
 from pathlib import Path
@@ -99,7 +100,9 @@ def test_launcher_script_targets_only_originating_tty_for_close(tmp_path: Path) 
 
 
 def test_launcher_script_ignores_stale_web_url_and_rewrites_localhost(tmp_path: Path) -> None:
-    port = "18765"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = str(sock.getsockname()[1])
     repo_root = Path(__file__).resolve().parents[1]
     launcher_src = repo_root / "agent-runner.command"
     launcher_dst = tmp_path / "agent-runner.command"
@@ -119,8 +122,19 @@ def test_launcher_script_ignores_stale_web_url_and_rewrites_localhost(tmp_path: 
         "#!/usr/bin/env bash\n"
         "python_log=\"${TMP_PYTHON_LOG:?}\"\n"
         "if [[ \"$1\" == \"-\" ]]; then\n"
-        "  cat >/dev/null\n"
-        "  exit 1\n"
+        "  /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 \"$@\"\n"
+        "  exit $?\n"
+        "fi\n"
+        "if [[ \"$1\" == \"-m\" && \"$2\" == \"agent_runner\" && \"$3\" == \"doctor\" ]]; then\n"
+        "  echo 'Alcove setup check'\n"
+        "  echo\n"
+        "  echo '[PASS] Python: Using Python 3.11.0.'\n"
+        "  echo '[PASS] Workspace path: OK.'\n"
+        "  echo '[PASS] Codex CLI: Found codex.'\n"
+        "  echo '[PASS] Codex authentication: Logged in.'\n"
+        "  echo\n"
+        "  echo 'Ready to go.'\n"
+        "  exit 0\n"
         "fi\n"
         "printf '%s\\n' \"$*\" >> \"$python_log\"\n"
         "repo=''\n"
@@ -201,6 +215,115 @@ def test_launcher_script_ignores_stale_web_url_and_rewrites_localhost(tmp_path: 
     assert completed.returncode == 0, completed.stderr
     assert (state_dir / "web-url").read_text(encoding="utf-8").strip() == f"http://127.0.0.1:{port}"
     assert f"http://127.0.0.1:{port}" in open_log.read_text(encoding="utf-8")
+
+
+def test_launcher_script_warns_but_continues_when_doctor_fails(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    launcher_src = repo_root / "agent-runner.command"
+    launcher_dst = tmp_path / "agent-runner.command"
+    launcher_dst.write_text(launcher_src.read_text(encoding="utf-8"), encoding="utf-8")
+    launcher_dst.chmod(launcher_dst.stat().st_mode | stat.S_IXUSR)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    port = "18766"
+
+    fake_python = bin_dir / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == \"-\" ]]; then\n"
+        "  /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 \"$@\"\n"
+        "  exit $?\n"
+        "fi\n"
+        "if [[ \"$1\" == \"-m\" && \"$2\" == \"agent_runner\" && \"$3\" == \"doctor\" ]]; then\n"
+        "  echo 'Alcove setup check'\n"
+        "  echo\n"
+        "  echo '[FAIL] Codex CLI: codex was not found on PATH.'\n"
+        "  echo '  Fix: Install Codex CLI and make sure the codex command works in your shell.'\n"
+        "  echo\n"
+        "  echo 'Setup is incomplete.'\n"
+        "  exit 1\n"
+        "fi\n"
+        "if [[ \"$1\" == \"-m\" && \"$2\" == \"agent_runner\" && \"$3\" == \"web\" ]]; then\n"
+        "  repo=''\n"
+        f"  port='{port}'\n"
+        "  while [[ $# -gt 0 ]]; do\n"
+        "    case \"$1\" in\n"
+        "      --repo) repo=\"$2\"; shift 2 ;;\n"
+        "      --port) port=\"$2\"; shift 2 ;;\n"
+        "      *) shift ;;\n"
+        "    esac\n"
+        "  done\n"
+        "  /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 - \"$repo\" \"$port\" <<'PY'\n"
+        "import json\n"
+        "import sys\n"
+        "import threading\n"
+        "import time\n"
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+        "\n"
+        "repo = sys.argv[1]\n"
+        "port = int(sys.argv[2])\n"
+        "\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path != '/api/server-info':\n"
+        "            self.send_response(404)\n"
+        "            self.end_headers()\n"
+        "            return\n"
+        "        payload = {\n"
+        "            'server_kind': 'agent_runner_web',\n"
+        "            'repo_path': repo,\n"
+        "            'build_label': 't01',\n"
+        "        }\n"
+        "        body = json.dumps(payload).encode('utf-8')\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('Content-Type', 'application/json')\n"
+        "        self.send_header('Content-Length', str(len(body)))\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(body)\n"
+        "\n"
+        "    def log_message(self, format, *args):\n"
+        "        return\n"
+        "\n"
+        "server = ThreadingHTTPServer(('127.0.0.1', port), Handler)\n"
+        "thread = threading.Thread(target=server.serve_forever, daemon=True)\n"
+        "thread.start()\n"
+        "time.sleep(2)\n"
+        "server.shutdown()\n"
+        "thread.join(timeout=1)\n"
+        "PY\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo unexpected invocation >&2\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    fake_open = bin_dir / "open"
+    fake_open.write_text(
+        "#!/usr/bin/env bash\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_open.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["AGENT_RUNNER_WEB_PORT"] = port
+
+    completed = subprocess.run(
+        ["/bin/bash", str(launcher_dst)],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 0
+    assert "Setup is incomplete." in completed.stderr
 
 
 def test_combined_session_flow_for_update_badge_reload_queue_and_tab_bar_visibility() -> None:

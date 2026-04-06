@@ -109,7 +109,7 @@ class WorkspaceSettings:
     override_enabled: bool = False
     provider: ProviderKind = ProviderKind.CODEX
     model: str = "gpt-5.3-codex"
-    run_mode: RunMode = RunMode.LOOP
+    run_mode: RunMode = RunMode.MESSAGE
     loop_count: int | None = None
 
 
@@ -167,7 +167,7 @@ class AppSettings:
     codex_bin: str = "codex"
     ollama_host: str = "http://127.0.0.1:11434"
     extra_access_dir: Path | None = None
-    default_run_mode: RunMode = RunMode.LOOP
+    default_run_mode: RunMode = RunMode.MESSAGE
     preflight_clarifications: bool = True
     checks_policy: ChecksPolicy = ChecksPolicy.AUTO
     animate_status_scenes: bool = True

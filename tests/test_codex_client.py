@@ -112,4 +112,7 @@ def test_run_codex_json_invokes_js_entrypoint_via_node(monkeypatch, tmp_path: Pa
     assert result.payload == {"ok": True}
     cmd = captured["cmd"]
     assert isinstance(cmd, list)
-    assert cmd[:2] == ["/usr/local/bin/node", str(codex_js)]
+    if cmd[:2] == ["/usr/bin/arch", "-arm64"]:
+        assert cmd[2:4] == ["/usr/local/bin/node", str(codex_js)]
+    else:
+        assert cmd[:2] == ["/usr/local/bin/node", str(codex_js)]

@@ -29,6 +29,25 @@ if [[ -z "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+run_doctor_check() {
+  local doctor_output
+  if doctor_output="$("$PYTHON_BIN" -m agent_runner doctor --repo "$SCRIPT_DIR" 2>&1)"; then
+    return 0
+  fi
+  {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Doctor check failed"
+    printf '%s\n' "$doctor_output"
+  } >>"$LOG_FILE"
+  printf '%s\n' "$doctor_output" >&2
+  if command -v osascript >/dev/null 2>&1; then
+    osascript >/dev/null 2>&1 <<APPLESCRIPT &
+display dialog "Alcove found a local setup issue.\n\nThe app will still open, and you can run 'agent-runner doctor' in this repo for details." buttons {"OK"} default button "OK"
+APPLESCRIPT
+  fi
+  return 0
+}
+run_doctor_check
+
 close_origin_terminal_session() {
   # Close only the terminal session that launched this script.
   if [[ -z "$TTY_PATH" || "$TTY_PATH" == "not a tty" ]]; then
@@ -71,7 +90,7 @@ APPLESCRIPT
 
 WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
 WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
-WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-jungleboogie}"
+WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
 APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
 OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
 URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
@@ -94,8 +113,9 @@ import urllib.request
 
 url, password, expected_repo = sys.argv[1:4]
 request = urllib.request.Request(url.rstrip("/") + "/api/server-info")
-token = base64.b64encode(f"user:{password}".encode("utf-8")).decode("ascii")
-request.add_header("Authorization", f"Basic {token}")
+if password:
+    token = base64.b64encode(f"user:{password}".encode("utf-8")).decode("ascii")
+    request.add_header("Authorization", f"Basic {token}")
 try:
     with urllib.request.urlopen(request, timeout=1.5) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -115,7 +135,11 @@ if server_matches_expected; then
   exit 0
 fi
 
-nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" bash -lc 'exec -a "agent-runner" "$0" -m agent_runner web --repo "$1" --host "$2" --port "$3" --password "$4"' "$PYTHON_BIN" "$SCRIPT_DIR" "$WEB_HOST" "$WEB_PORT" "$WEB_PASSWORD" >>"$LOG_FILE" 2>&1 &
+LAUNCH_CMD=( "$PYTHON_BIN" -m agent_runner web --repo "$SCRIPT_DIR" --host "$WEB_HOST" --port "$WEB_PORT" )
+if [[ -n "$WEB_PASSWORD" ]]; then
+  LAUNCH_CMD+=( --password "$WEB_PASSWORD" )
+fi
+nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" "${LAUNCH_CMD[@]}" >>"$LOG_FILE" 2>&1 &
 APP_PID="$!"
 
 # Only close the originating terminal once the expected runtime is confirmed.

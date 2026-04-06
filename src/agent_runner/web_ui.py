@@ -192,7 +192,7 @@ def render_web_app() -> str:
             --danger: #b44a3f;
             --ok: #3e6a51;
             --shadow: 0 16px 42px rgba(30, 35, 31, 0.08);
-            --chat-pane-width: clamp(280px, 24vw, 360px);
+            --chat-pane-width: clamp(240px, 20vw, 320px);
             --pane-divider-width: 16px;
           }
           * { box-sizing: border-box; }
@@ -326,6 +326,52 @@ def render_web_app() -> str:
             min-height: 0;
             display: grid;
             grid-template-columns: var(--chat-pane-width) var(--pane-divider-width) minmax(0, 1fr);
+          }
+          .setup-banner {
+            display: none;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e6d4a7;
+            background:
+              linear-gradient(180deg, rgba(249, 241, 216, 0.96), rgba(247, 237, 209, 0.96));
+          }
+          .setup-banner.is-visible {
+            display: block;
+          }
+          .setup-banner-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+          }
+          .setup-banner-title {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #8a6620;
+          }
+          .setup-banner-copy {
+            margin: 6px 0 0;
+            font-size: 13px;
+            color: #5c5034;
+            line-height: 1.5;
+          }
+          .setup-banner-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
+          .setup-banner-list {
+            margin: 10px 0 0;
+            padding-left: 18px;
+            color: #5c5034;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .setup-banner-list li {
+            margin: 0 0 6px;
           }
           .pane {
             min-width: 0;
@@ -582,9 +628,11 @@ def render_web_app() -> str:
             background: #fcfdff;
           }
           .workspace-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            gap: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            margin-top: 14px;
+            border-top: 1px solid var(--line-soft);
           }
           .home-shell {
             display: grid;
@@ -606,6 +654,12 @@ def render_web_app() -> str:
             font-size: 13px;
             color: var(--muted);
             line-height: 1.55;
+          }
+          .home-panel p.hero-copy,
+          .home-panel p.dropzone-copy {
+            font-size: 12px;
+            line-height: 1.45;
+            max-width: 34ch;
           }
           .home-actions {
             display: flex;
@@ -645,26 +699,32 @@ def render_web_app() -> str:
             padding: 16px 18px 0;
           }
           .workspace-grid.compact {
-            grid-template-columns: 1fr;
+            margin-top: 14px;
           }
           .workspace-card {
             text-align: left;
-            border: 1px solid var(--line);
-            background: #fcfdff;
-            padding: 12px;
+            border: 0;
+            border-bottom: 1px solid var(--line-soft);
+            background: transparent;
+            padding: 10px 0;
             cursor: pointer;
           }
           .workspace-card:hover {
-            background: #f2f6f9;
+            background: transparent;
+            color: var(--accent);
+          }
+          .workspace-card:hover .workspace-card-path,
+          .workspace-card:hover .workspace-card-meta {
+            color: var(--accent);
           }
           .workspace-card-title {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
           }
           .workspace-card-path,
           .workspace-card-meta {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--muted);
             white-space: nowrap;
             overflow: hidden;
@@ -1367,6 +1427,7 @@ def render_web_app() -> str:
                 <div id="global-run-chip" class="chip">idle</div>
               </div>
             </header>
+            <section id="setup-banner" class="setup-banner" hidden></section>
             <section id="shell" class="shell">
               <section class="pane thread-pane">
                 <div class="thread">
@@ -1522,6 +1583,7 @@ def render_web_app() -> str:
             eventCursor: '0',
             assistantMode: 'ask',
             reviewPaneHidden: true,
+            setupReport: null,
           };
           const CODEX_MODEL_OPTIONS = [
             { value: 'gpt-5.4', label: 'GPT-5.4 (medium)' },
@@ -1606,8 +1668,8 @@ def render_web_app() -> str:
             const shell = document.getElementById('shell');
             if (!shell) return;
             const totalWidth = shell.clientWidth || window.innerWidth;
-            const min = 240;
-            const max = Math.min(520, Math.max(300, totalWidth * 0.45));
+            const min = 220;
+            const max = Math.min(460, Math.max(280, totalWidth * 0.42));
             const clamped = Math.max(min, Math.min(max, width));
             document.documentElement.style.setProperty('--chat-pane-width', `${clamped}px`);
           }
@@ -1674,6 +1736,41 @@ def render_web_app() -> str:
             const url = new URL(window.location.href);
             url.searchParams.set('_ar_refresh', String(Date.now()));
             window.location.replace(url.toString());
+          }
+
+          function renderSetupBanner() {
+            const banner = document.getElementById('setup-banner');
+            if (!banner) return;
+            const report = state.setupReport;
+            if (!report || report.ok) {
+              banner.hidden = true;
+              banner.classList.remove('is-visible');
+              banner.innerHTML = '';
+              return;
+            }
+            const failedChecks = (report.checks || []).filter((check) => !check.ok);
+            const items = failedChecks
+              .map((check) => {
+                const detail = escapeHtml(check.detail || '');
+                const fix = check.fix ? ` Fix: ${escapeHtml(check.fix)}` : '';
+                return `<li><strong>${escapeHtml(check.label || check.key || 'Setup item')}</strong>: ${detail}${fix}</li>`;
+              })
+              .join('');
+            banner.hidden = false;
+            banner.classList.add('is-visible');
+            banner.innerHTML = `
+              <div class="setup-banner-head">
+                <div>
+                  <p class="setup-banner-title">Setup Needed</p>
+                  <p class="setup-banner-copy">This machine is missing something Alcove needs before Codex work can run. Fix the items below, then refresh this page or run <code>agent-runner doctor</code> in the repo.</p>
+                </div>
+                <div class="setup-banner-actions">
+                  <button type="button" onclick="hardRefresh()">Refresh</button>
+                  <button type="button" onclick="openSettings()">Settings</button>
+                </div>
+              </div>
+              <ul class="setup-banner-list">${items}</ul>
+            `;
           }
 
           async function copyText(text) {
@@ -1958,7 +2055,7 @@ def render_web_app() -> str:
               host.innerHTML = `
                 <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
                   <h2>Alcove Studio</h2>
-                  <p>Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
+                  <p class="hero-copy">Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
                   <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
@@ -1972,7 +2069,7 @@ def render_web_app() -> str:
             host.innerHTML = `
               <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
                 <h2>Alcove Studio</h2>
-                <p>Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
+                <p class="hero-copy">Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
                 <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
                 <div class="home-actions">
                   <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
@@ -2025,7 +2122,7 @@ def render_web_app() -> str:
                 <section class="home-panel">
                   <h3>Recent Workspaces</h3>
                   <p>Jump back into the projects you were using most recently.</p>
-                  <section class="workspace-grid compact" style="margin-top: 14px;">
+                  <section class="workspace-grid compact">
                     ${recent.length ? recent.map((workspace) => `
                       <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
                         <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
@@ -2289,14 +2386,14 @@ def render_web_app() -> str:
             const textarea = document.getElementById('composer');
             if (!textarea) return;
             if (isStudioWorkspace(state.workspace)) {
-              document.getElementById('composer-mode').value = 'loop';
+              document.getElementById('composer-mode').value = 'message';
               document.getElementById('assistant-mode').value = 'dev';
               state.assistantMode = 'dev';
               textarea.placeholder = studioPlaceholder(state.workspace?.workspace_kind);
               const modeMessage = document.getElementById('menu-mode-message');
               const modeLoop = document.getElementById('menu-mode-loop');
-              if (modeMessage) modeMessage.classList.remove('active');
-              if (modeLoop) modeLoop.classList.add('active');
+              if (modeMessage) modeMessage.classList.add('active');
+              if (modeLoop) modeLoop.classList.remove('active');
               const ask = document.getElementById('menu-assistant-ask');
               const ops = document.getElementById('menu-assistant-ops');
               const dev = document.getElementById('menu-assistant-dev');
@@ -2429,6 +2526,7 @@ def render_web_app() -> str:
             const host = document.getElementById('connections-panel');
             if (!host) return;
             const info = state.serverInfo || {};
+            const setupReport = state.setupReport || {};
             const localUrl = info.local_url || info.localhost_url || 'http://127.0.0.1:8765/';
             const phoneUrl = info.phone_url || '';
             const phoneEnabled = Boolean(info.phone_enabled && phoneUrl);
@@ -2436,6 +2534,21 @@ def render_web_app() -> str:
             const repoPath = info.repo_path || 'Unknown repo';
             const port = info.bind_port || '8765';
             host.innerHTML = `
+              ${setupReport.ok === false ? `
+                <article class="connection-card">
+                  <div class="connection-title">
+                    <span>Setup</span>
+                    <span class="connection-state">Needs attention</span>
+                  </div>
+                  <p class="connection-copy">Alcove detected a local setup issue. Run <code>agent-runner doctor</code> in this repo after fixing the items below.</p>
+                  <div class="connection-meta">
+                    ${(setupReport.checks || [])
+                      .filter((check) => !check.ok)
+                      .map((check) => `${escapeHtml(check.label || check.key)}: ${escapeHtml(check.fix || check.detail || '')}`)
+                      .join('<br />')}
+                  </div>
+                </article>
+              ` : ''}
               <article class="connection-card">
                 <div class="connection-title">
                   <span>This Mac</span>
@@ -2593,6 +2706,7 @@ def render_web_app() -> str:
             const input = document.getElementById('composer-attachments');
             const files = Array.from((input && input.files) || []);
             const content = textarea.value.trim();
+            const mode = document.getElementById('composer-mode').value;
             if (!content && !files.length) {
               window.alert('Type a prompt or attach a screenshot first.');
               return false;
@@ -2603,7 +2717,7 @@ def render_web_app() -> str:
               if (files.length) {
                 const formData = new FormData();
                 formData.append('content', content);
-                formData.append('mode', document.getElementById('composer-mode').value);
+                formData.append('mode', mode);
                 formData.append('assistant_mode', document.getElementById('assistant-mode').value);
                 formData.append('workspace_id', state.workspaceId);
                 files.forEach((file) => formData.append('attachments', file));
@@ -2617,7 +2731,7 @@ def render_web_app() -> str:
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({
                     content,
-                    mode: document.getElementById('composer-mode').value,
+                    mode,
                     assistant_mode: document.getElementById('assistant-mode').value,
                     workspace_id: state.workspaceId,
                   }),
@@ -2627,6 +2741,9 @@ def render_web_app() -> str:
               if (input) input.value = '';
               onComposerFilesChanged();
               state.lastSignature = null;
+              if (mode === 'loop') {
+                await setMode('message');
+              }
               await loadConversationDetail();
               await pollStatus();
               await loadReview();
@@ -2939,6 +3056,15 @@ def render_web_app() -> str:
             renderStatus(state.runStatus);
           }
 
+          async function loadSetupStatus() {
+            try {
+              state.setupReport = await fetchJson('/api/setup-check');
+            } catch (_) {
+              state.setupReport = null;
+            }
+            renderSetupBanner();
+          }
+
           async function pollStatus() {
             try {
               const status = await fetchJson('/api/run-status');
@@ -2999,6 +3125,7 @@ def render_web_app() -> str:
             bindPaneDivider();
             applyReviewPaneVisibility();
             bindWorkspaceDropTargets();
+            await loadSetupStatus();
             await loadServerInfo();
             await loadWorkspaces();
             await pollStatus();
@@ -3031,6 +3158,7 @@ def render_web_app() -> str:
             window.setInterval(pollEvents, 1200);
             window.setInterval(pollStatus, 5000);
             window.setInterval(loadServerInfo, 10000);
+            window.setInterval(loadSetupStatus, 15000);
             window.addEventListener('resize', () => {
               applyStoredPaneLayout();
               applyMobileDefaults();
@@ -3127,18 +3255,25 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
           .rail {{
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 0;
+            border-top: 1px solid var(--line);
           }}
           .rail-item {{
             display: block;
             text-decoration: none;
             color: inherit;
-            border: 1px solid var(--line);
-            background: #f7f8fb;
-            padding: 10px;
+            border: 0;
+            border-bottom: 1px solid var(--line);
+            background: transparent;
+            padding: 10px 0;
+          }}
+          .rail-item:hover {{
+            color: var(--accent);
           }}
           .rail-item-active {{
-            background: #edf1f4;
+            background: transparent;
+            box-shadow: inset 2px 0 0 var(--accent);
+            padding-left: 8px;
           }}
           .rail-title {{
             font-size: 13px;
@@ -3153,6 +3288,9 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             font-size: 12px;
             color: var(--muted);
             line-height: 1.35;
+          }}
+          .rail-item:hover .rail-meta {{
+            color: var(--accent);
           }}
           .main {{
             flex: 1;

@@ -269,6 +269,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         base = f"http://127.0.0.1:{server.server_port}"
         settings = _get_json(f"{base}/api/settings")
         assert settings["provider"] in {"codex", "ollama"}
+        assert settings["codex_bin"] == "codex"
         updated = _patch_json(
             f"{base}/api/settings",
             {
@@ -286,6 +287,43 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         assert updated["planner_model"] == "qwen2.5:7b"
         models = _get_json(f"{base}/api/providers/ollama/models")
         assert "available" in models and "models" in models and "message" in models
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_setup_check_endpoint_reports_doctor_status(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(
+        "agent_runner.service.run_doctor",
+        lambda **kwargs: type(
+            "Report",
+            (),
+            {
+                "to_dict": lambda self: {
+                    "ok": False,
+                    "checks": [
+                        {
+                            "key": "codex_login",
+                            "label": "Codex authentication",
+                            "ok": False,
+                            "detail": "Not logged in.",
+                            "fix": "Run `codex login`.",
+                        }
+                    ],
+                    "summary": "Setup is incomplete.",
+                }
+            },
+        )(),
+    )
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = _get_json(f"{base}/api/setup-check")
+        assert payload["ok"] is False
+        assert payload["checks"][0]["key"] == "codex_login"
     finally:
         server.shutdown()
         server.server_close()

@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .context_assembler import ContextAssembler
 from .conversation_store import ConversationStore, WorkspaceConversationController
+from .doctor import run_doctor
 from .models import AssistantCapabilityMode, AppSettings, ChecksPolicy, ConversationRecord, ProviderKind, RunMode
 from .page_context import normalize_page_context
 from .providers import ExecutionRequest, PhaseExecutionClient, ProviderRouter, probe_ollama
@@ -562,6 +563,7 @@ class AgentRunnerService:
         return {
             "provider": str(settings.provider),
             "model": settings.model,
+            "codex_bin": settings.codex_bin,
             "planner_model": settings.planner_model,
             "builder_model": settings.builder_model,
             "reviewer_model": settings.reviewer_model,
@@ -569,6 +571,13 @@ class AgentRunnerService:
             "max_step_retries": settings.max_step_retries,
             "phase_timeout_seconds": settings.phase_timeout_seconds,
         }
+
+    def get_setup_status(self) -> dict[str, object]:
+        report = run_doctor(
+            codex_bin=self.app_settings.codex_bin,
+            repo_path=self.config.repo_path,
+        )
+        return report.to_dict()
 
     def update_settings(self, payload: dict[str, object]) -> dict[str, object]:
         settings = self.app_settings

@@ -77,6 +77,9 @@ def create_server(
                 if path == "/api/settings":
                     self._json_response(service.get_settings())
                     return
+                if path == "/api/setup-check":
+                    self._json_response(service.get_setup_status())
+                    return
                 if path == "/api/providers/ollama/models":
                     self._json_response(service.list_ollama_models())
                     return

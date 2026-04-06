@@ -2,6 +2,49 @@
 
 Calm, repo-scoped control for Codex, built around visible artifacts.
 
+## Open Source Status
+
+Alcove is still early, but this repo is intended to be usable in public:
+
+- the browser-first runtime is the primary path
+- the macOS launcher and packaged app are convenience layers on top
+- tests should be green before release cuts
+- internal roadmap docs are kept in-repo for product context, not as polished public docs
+
+If you are landing here for the first time, start with the dev quickstart below.
+
+## Quickstart
+
+Prerequisites:
+
+- Python 3.11+
+- Codex CLI installed (`codex --version`)
+- Codex authenticated (`codex login status` should show ChatGPT login)
+
+Setup:
+
+```bash
+./scripts/setup-dev.sh
+```
+
+Launch the browser-first runtime:
+
+```bash
+agent-runner web
+```
+
+Run the test suite:
+
+```bash
+pytest -q
+```
+
+Check whether a machine is ready before launching:
+
+```bash
+agent-runner doctor
+```
+
 Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
 
 It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
@@ -147,11 +190,19 @@ PYTHONPATH=src python -m agent_runner run task.md --repo /absolute/path/to/targe
 
 ## Install (dev)
 
-Prerequisites:
+One-command setup:
 
-- Python 3.11+
-- Codex CLI installed (`codex --version`)
-- Codex authenticated (`codex login status` should show ChatGPT login)
+```bash
+./scripts/setup-dev.sh
+```
+
+Then confirm the local environment is ready:
+
+```bash
+agent-runner doctor
+```
+
+Manual setup:
 
 ```bash
 python -m venv .venv
@@ -200,7 +251,9 @@ The web runtime serves:
 
 Optional password protection is available with `--password` using HTTP basic auth.
 
-`agent-runner.command` defaults to web mode with `0.0.0.0` bind and password `jungleboogie` (override via `AGENT_RUNNER_WEB_PASSWORD`).
+`agent-runner.command` defaults to web mode with `0.0.0.0` bind.
+
+If you want password protection for LAN or phone access, set `AGENT_RUNNER_WEB_PASSWORD` before launch.
 
 Run artifacts save with build-aware folders such as `run-b0001-<utc-stamp>`, and each run includes `run_metadata.json`.
 
