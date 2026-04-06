@@ -240,6 +240,83 @@ def test_define_workspace_persists_display_name_and_repo_path(tmp_path: Path) ->
     assert workspace["repo_path"] == str(repo_path)
 
 
+def test_import_workspace_reuses_existing_workspace_for_same_repo(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    repo_path = tmp_path / "alt-repo"
+    _init_git_repo(repo_path)
+
+    first = service.import_workspace_from_path(str(repo_path))
+    second = service.import_workspace_from_path(str(repo_path))
+
+    assert first["id"] == second["id"]
+    assert second["repo_path"] == str(repo_path)
+
+
+def test_import_workspace_auto_detects_previewable_web_repo_as_studio(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    repo_path = tmp_path / "northstar-site"
+    dist = repo_path / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Northstar</title>", encoding="utf-8")
+
+    workspace = service.import_workspace_from_path(str(repo_path))
+
+    assert workspace["workspace_kind"] == "studio_web"
+    assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/dist/index.html"
+    assert workspace["preview_state"] == "ready"
+    conversation = service.get_conversation(str(workspace["active_conversation_id"]), workspace_id=str(workspace["id"]))
+    assert conversation["assistant_mode"] == "dev"
+
+
+def test_import_workspace_auto_detects_phaser_repo_as_game_studio(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    repo_path = tmp_path / "gnome-roundup"
+    repo_path.mkdir(parents=True)
+    (repo_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "gnome-roundup",
+                "scripts": {"build": "vite build"},
+                "dependencies": {"phaser": "^3.80.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    workspace = service.import_workspace_from_path(str(repo_path))
+
+    assert workspace["workspace_kind"] == "studio_game"
+    assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/dist/index.html"
+    assert workspace["preview_state"] == "draft"
+
+
+def test_import_workspace_uses_studio_manifest_kind_and_template(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    repo_path = tmp_path / "landmines"
+    repo_path.mkdir(parents=True)
+    (repo_path / "index.html").write_text("<!doctype html><title>Landmines</title>", encoding="utf-8")
+    (repo_path / "alcove-studio.json").write_text(
+        json.dumps(
+            {
+                "workspace_id": "landmines",
+                "workspace_kind": "studio_game",
+                "artifact_title": "landmines",
+                "template_kind": "platformer",
+                "preview_mode": "managed-static",
+                "entry_file": "game.js",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    workspace = service.import_workspace_from_path(str(repo_path))
+
+    assert workspace["workspace_kind"] == "studio_game"
+    assert workspace["template_kind"] == "platformer"
+    assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/index.html"
+    assert workspace["preview_state"] == "ready"
+
+
 def test_list_active_repositories_scans_git_roots(tmp_path: Path) -> None:
     service = _make_service(tmp_path, phase_client=FakePhaseClient())
     repo_a = tmp_path / "repo-a"

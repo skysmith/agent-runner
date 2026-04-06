@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import mimetypes
 import traceback
@@ -255,6 +256,27 @@ def create_server(
                         ),
                         status=HTTPStatus.CREATED,
                     )
+                    return
+                if path == "/api/workspaces/import-folder":
+                    body = self._json_body()
+                    repo_path = _body_text(body, "repo_path")
+                    if repo_path:
+                        workspace = service.import_workspace_from_path(
+                            repo_path,
+                            display_name=_body_text(body, "display_name"),
+                            workspace_kind=_body_text(body, "workspace_kind"),
+                        )
+                    else:
+                        if not self._is_loopback_client():
+                            self._error_response(HTTPStatus.FORBIDDEN, "Native folder picker is only available from this machine.")
+                            return
+                        selected_path = service.pick_local_folder_path()
+                        workspace = service.import_workspace_from_path(
+                            selected_path,
+                            display_name=_body_text(body, "display_name"),
+                            workspace_kind=_body_text(body, "workspace_kind"),
+                        )
+                    self._json_response(workspace, status=HTTPStatus.CREATED)
                     return
                 if path.startswith("/api/workspaces/") and path.endswith("/conversations"):
                     body = self._json_body()
@@ -634,6 +656,13 @@ def create_server(
                 return False
             _, supplied_password = decoded.split(":", 1)
             return supplied_password == password
+
+        def _is_loopback_client(self) -> bool:
+            host = str(self.client_address[0] or "").strip()
+            try:
+                return ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                return host in {"localhost"}
 
     return ThreadingHTTPServer((host, port), CompanionHandler)
 

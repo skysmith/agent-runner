@@ -631,7 +631,7 @@ def render_web_app() -> str:
             display: flex;
             flex-direction: column;
             gap: 0;
-            margin-top: 14px;
+            margin-top: 10px;
             border-top: 1px solid var(--line-soft);
           }
           .home-shell {
@@ -647,7 +647,7 @@ def render_web_app() -> str:
           }
           .home-panel h2,
           .home-panel h3 {
-            margin: 0 0 8px;
+            margin: 0 0 5px;
           }
           .home-panel p {
             margin: 0;
@@ -657,15 +657,15 @@ def render_web_app() -> str:
           }
           .home-panel p.hero-copy,
           .home-panel p.dropzone-copy {
-            font-size: 12px;
-            line-height: 1.45;
-            max-width: 34ch;
+            font-size: 11px;
+            line-height: 1.35;
+            max-width: 36ch;
           }
           .home-actions {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
-            margin-top: 14px;
+            margin-top: 10px;
           }
           .dropzone {
             border: 0;
@@ -675,7 +675,7 @@ def render_web_app() -> str:
             display: grid;
             align-content: center;
             justify-items: start;
-            gap: 10px;
+            gap: 8px;
             transition: background 120ms ease, box-shadow 120ms ease;
           }
           .dropzone strong {
@@ -696,10 +696,10 @@ def render_web_app() -> str:
           .home-dropzone {
             min-height: 100%;
             align-content: start;
-            padding: 16px 18px 0;
+            padding: 14px 18px 0;
           }
           .workspace-grid.compact {
-            margin-top: 14px;
+            margin-top: 10px;
           }
           .workspace-card {
             text-align: left;
@@ -2059,7 +2059,7 @@ def render_web_app() -> str:
                   <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                    <button type="button" onclick="promptImportWorkspace()">Import</button>
                   </div>
                   <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
                 </section>
@@ -2073,7 +2073,7 @@ def render_web_app() -> str:
                 <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                 <div class="home-actions">
                   <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                  <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                  <button type="button" onclick="promptImportWorkspace()">Import</button>
                 </div>
                 <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
                 <section class="workspace-grid">
@@ -2111,7 +2111,7 @@ def render_web_app() -> str:
                   <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                    <button type="button" onclick="promptImportWorkspace()">Import</button>
                   </div>
                   <div id="workspace-dropzone" class="dropzone">
                     <strong>Drop a folder to map a local project</strong>
@@ -2791,21 +2791,15 @@ def render_web_app() -> str:
             const cleanPath = trimmedPath.replace(/^file:\/\//, '');
             const segments = cleanPath.split('/').filter(Boolean);
             const folderName = String(displayName || segments[segments.length - 1] || 'workspace').trim();
-            const workspaceId = slugifyWorkspaceId(folderName);
-            if (!workspaceId) {
-              window.alert('Could not create a workspace id from that folder.');
-              return;
-            }
-            const workspace = await fetchJson('/api/workspaces', {
+            const workspace = await fetchJson('/api/workspaces/import-folder', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                id: workspaceId,
                 display_name: folderName,
                 repo_path: decodeURIComponent(cleanPath),
               }),
             });
-            state.workspaceId = workspace.id || workspaceId;
+            state.workspaceId = workspace.id || slugifyWorkspaceId(folderName);
             state.conversationId = workspace.active_conversation_id || null;
             state.lastSignature = null;
             await loadWorkspaces();
@@ -2814,7 +2808,24 @@ def render_web_app() -> str:
           }
 
           async function promptImportWorkspace() {
-            const folderPath = (window.prompt('Paste the local folder path to map into Alcove.', '') || '').trim();
+            try {
+              const workspace = await fetchJson('/api/workspaces/import-folder', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({}),
+              });
+              state.workspaceId = workspace.id || null;
+              state.conversationId = workspace.active_conversation_id || null;
+              state.lastSignature = null;
+              await loadWorkspaces();
+              await loadConversationDetail();
+              await loadReview();
+              return;
+            } catch (error) {
+              const message = String(error?.message || '');
+              if (message.toLowerCase().includes('cancelled')) return;
+            }
+            const folderPath = (window.prompt('Paste the local folder path to import into Alcove.', '') || '').trim();
             if (!folderPath) return;
             try {
               await createWorkspaceFromFolderPath(folderPath);
@@ -2844,7 +2855,7 @@ def render_web_app() -> str:
             setDropzoneActive(false);
             const droppedPath = extractDroppedFolderPath(event.dataTransfer);
             if (!droppedPath) {
-              window.alert('Finder did not share a folder path here. Please use Import Folder and paste the path.');
+              window.alert('Finder did not share a folder path here. Use Import to open the native picker.');
               return;
             }
             try {

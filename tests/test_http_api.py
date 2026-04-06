@@ -144,6 +144,87 @@ def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> N
         server.server_close()
 
 
+def test_workspace_import_endpoint_accepts_repo_path_and_auto_detects_studio(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "northstar-site"
+    dist = repo / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Northstar</title>", encoding="utf-8")
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(
+            f"{base}/api/workspaces/import-folder",
+            {
+                "repo_path": str(repo),
+            },
+        )
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["workspace_kind"] == "studio_web"
+        assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/dist/index.html"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_import_endpoint_can_use_native_picker(monkeypatch, tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "picked-repo"
+    _init_git_repo(repo)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(service, "pick_local_folder_path", lambda: str(repo))
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(f"{base}/api/workspaces/import-folder", {})
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["display_name"] == "picked-repo"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_import_endpoint_uses_studio_manifest_for_existing_project(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "landmines"
+    repo.mkdir(parents=True)
+    (repo / "index.html").write_text("<!doctype html><title>Landmines</title>", encoding="utf-8")
+    (repo / "alcove-studio.json").write_text(
+        json.dumps(
+            {
+                "workspace_id": "landmines",
+                "workspace_kind": "studio_game",
+                "artifact_title": "landmines",
+                "template_kind": "platformer",
+                "preview_mode": "managed-static",
+                "entry_file": "game.js",
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(
+            f"{base}/api/workspaces/import-folder",
+            {
+                "repo_path": str(repo),
+            },
+        )
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["workspace_kind"] == "studio_game"
+        assert workspace["template_kind"] == "platformer"
+        assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/index.html"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_studio_game_endpoints_create_preview_and_publish(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     service = _make_service(tmp_path)

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote, urlparse
 
 from .context_assembler import ContextAssembler
 from .conversation_store import ConversationStore, WorkspaceConversationController
@@ -32,6 +34,7 @@ from .studio import (
 )
 
 ServiceEventCallback = Callable[[str, str], None]
+KNOWN_STUDIO_KINDS = frozenset({"studio_game", "studio_web", "studio_data", "studio_docs"})
 
 
 @dataclass(slots=True)
@@ -272,6 +275,69 @@ class AgentRunnerService:
             },
         )
         return payload
+
+    def import_workspace_from_path(
+        self,
+        repo_path: str,
+        *,
+        display_name: str | None = None,
+        workspace_kind: str | None = None,
+    ) -> dict[str, object]:
+        normalized_repo = _normalize_repo_input_path(repo_path)
+        if not normalized_repo.exists() or not normalized_repo.is_dir():
+            raise ValueError(f"Workspace repo path does not exist: {normalized_repo}")
+
+        existing_id = self._workspace_id_for_repo_path(normalized_repo)
+        folder_name = (display_name or normalized_repo.name).strip() or normalized_repo.name or "workspace"
+        workspace_id = existing_id or self._unique_workspace_id(folder_name)
+        profile = self._import_workspace_profile(
+            repo_path=normalized_repo,
+            workspace_id=workspace_id,
+            display_name=folder_name,
+            preferred_workspace_kind=workspace_kind,
+        )
+
+        workspace = self.define_workspace(
+            workspace_id,
+            display_name=folder_name,
+            repo_path=str(normalized_repo),
+            workspace_kind=str(profile["workspace_kind"] or "standard"),
+            artifact_title=profile["artifact_title"],
+            template_kind=profile["template_kind"],
+            preview_url=profile["preview_url"],
+            preview_state=profile["preview_state"],
+            publish_state=profile["publish_state"],
+        )
+
+        if self._is_studio_workspace_kind(workspace.get("workspace_kind")):
+            controller = self._controller(workspace_id)
+            record = controller.active_conversation()
+            controller.set_assistant_context(record.id, assistant_mode=AssistantCapabilityMode.DEV)
+
+        return workspace
+
+    def pick_local_folder_path(self) -> str:
+        if sys.platform != "darwin":
+            raise ValueError("Native folder picker is currently available on macOS only.")
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Choose a local project folder to import into Alcove:")',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if "-128" in detail or "User canceled" in detail:
+                raise ValueError("Folder selection cancelled.")
+            raise ValueError(f"Could not open native folder picker: {detail or 'unknown error'}")
+        selected = (result.stdout or "").strip()
+        if not selected:
+            raise ValueError("Folder selection cancelled.")
+        return selected
 
     def define_workspace(
         self,
@@ -1025,6 +1091,20 @@ class AgentRunnerService:
     def _controller(self, workspace_id: str) -> WorkspaceConversationController:
         return WorkspaceConversationController(self.conversation_store, workspace_id)
 
+    def _workspace_id_for_repo_path(self, repo_path: Path) -> str | None:
+        expected = repo_path.resolve()
+        for workspace in self.list_workspaces():
+            raw_repo = str(workspace.get("repo_path") or "").strip()
+            if not raw_repo:
+                continue
+            try:
+                candidate = Path(raw_repo).expanduser().resolve()
+            except OSError:
+                continue
+            if candidate == expected:
+                return str(workspace["id"])
+        return None
+
     def studio_preview_file(self, workspace_id: str, relative_path: str) -> Path:
         controller = self._controller(workspace_id)
         if not self._is_studio_workspace_kind(controller.state.workspace_kind):
@@ -1095,6 +1175,62 @@ class AgentRunnerService:
         if not isinstance(scripts, dict):
             return {}
         return {str(key): value for key, value in scripts.items()}
+
+    def _import_workspace_profile(
+        self,
+        *,
+        repo_path: Path,
+        workspace_id: str,
+        display_name: str,
+        preferred_workspace_kind: str | None,
+    ) -> dict[str, str | None]:
+        package_json = _read_package_json(repo_path / "package.json")
+        studio_manifest = _read_studio_manifest(repo_path)
+        requested_kind = str(preferred_workspace_kind or "").strip().lower()
+        manifest_kind = str(studio_manifest.get("workspace_kind") or "").strip().lower()
+        manifest_template = _optional_text(studio_manifest.get("template_kind"))
+        preview_relative_path = _detect_preview_entry_path(repo_path, package_json)
+        has_phaser = _package_uses_dependency(package_json, "phaser")
+
+        if requested_kind in KNOWN_STUDIO_KINDS:
+            studio_kind = requested_kind
+        elif manifest_kind in KNOWN_STUDIO_KINDS:
+            studio_kind = manifest_kind
+        elif preview_relative_path:
+            studio_kind = "studio_game" if has_phaser else "studio_web"
+        else:
+            studio_kind = ""
+
+        if not studio_kind:
+            return {
+                "workspace_kind": "standard",
+                "artifact_title": None,
+                "template_kind": None,
+                "preview_url": None,
+                "preview_state": None,
+                "publish_state": None,
+            }
+
+        if not preview_relative_path:
+            preview_relative_path = _default_preview_entry_path(repo_path, package_json)
+        if manifest_template and manifest_kind == studio_kind:
+            template_kind = normalize_template_kind(studio_kind, manifest_template)
+        else:
+            template_kind = "phaser-vite" if studio_kind == "studio_game" else "imported"
+        preview_state = "ready" if preview_relative_path and (repo_path / preview_relative_path).exists() else "draft"
+        preview_url = (
+            f"/studio/preview/{workspace_id}/{preview_relative_path}"
+            if preview_relative_path
+            else None
+        )
+        return {
+            "workspace_kind": studio_kind,
+            "artifact_title": display_name,
+            "template_kind": template_kind,
+            "preview_url": preview_url,
+            "preview_state": preview_state,
+            "publish_state": "draft",
+        }
 
     def _find_conversation(
         self,
@@ -1385,3 +1521,55 @@ def _is_hidden_relative(path: Path, root: Path) -> bool:
 
 def _slugify_workspace_id(raw: str) -> str:
     return slugify_workspace_id(raw) or AgentRunnerService.DEFAULT_WEB_WORKSPACE_ID
+
+
+def _normalize_repo_input_path(raw: str) -> Path:
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("Workspace repo path cannot be empty.")
+    if text.startswith("file://"):
+        parsed = urlparse(text)
+        text = unquote(parsed.path or "")
+    return Path(text).expanduser().resolve()
+
+
+def _read_package_json(package_json_path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _package_uses_dependency(package_json: dict[str, object], name: str) -> bool:
+    for section_name in ("dependencies", "devDependencies"):
+        section = package_json.get(section_name)
+        if isinstance(section, dict) and name in section:
+            return True
+    return False
+
+
+def _package_has_build_script(package_json: dict[str, object]) -> bool:
+    scripts = package_json.get("scripts")
+    return isinstance(scripts, dict) and bool(str(scripts.get("build") or "").strip())
+
+
+def _detect_preview_entry_path(repo_path: Path, package_json: dict[str, object]) -> str | None:
+    for relative in ("dist/index.html", "index.html"):
+        if (repo_path / relative).exists():
+            return relative
+    if _package_has_build_script(package_json):
+        return "dist/index.html"
+    return None
+
+
+def _default_preview_entry_path(repo_path: Path, package_json: dict[str, object]) -> str | None:
+    return _detect_preview_entry_path(repo_path, package_json)
+
+
+def _read_studio_manifest(repo_path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads((repo_path / "alcove-studio.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
