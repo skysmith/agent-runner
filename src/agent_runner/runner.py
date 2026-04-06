@@ -322,7 +322,7 @@ class AgentRunner:
         if self.config.status_callback:
             self.config.status_callback(message)
         if self.config.progress:
-            print(f"[agent-runner] {message}", file=sys.stderr)
+            print(f"[alcove] {message}", file=sys.stderr)
 
     def _compose_success_message(self, step_runs: list[StepRun], task_complete: bool) -> str:
         if not step_runs:

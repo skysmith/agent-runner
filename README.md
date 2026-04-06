@@ -30,7 +30,7 @@ Setup:
 Launch the browser-first runtime:
 
 ```bash
-agent-runner web
+alcove web
 ```
 
 Run the test suite:
@@ -42,8 +42,10 @@ pytest -q
 Check whether a machine is ready before launching:
 
 ```bash
-agent-runner doctor
+alcove doctor
 ```
+
+During the transition, the older `agent-runner` command name and `./agent-runner.command` launcher still work as compatibility aliases.
 
 Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
 
@@ -135,19 +137,19 @@ The older finance-specific roadmap in `docs/alcove.rtf` still matters, but it sh
 Browser-first runtime:
 
 ```bash
-agent-runner web
+alcove web
 ```
 
-Legacy alias (same HTTP runtime, network-first bind default):
+Network-first alias (same HTTP runtime, `0.0.0.0` bind default):
 
 ```bash
-agent-runner serve
+alcove serve
 ```
 
 Desktop launcher:
 
 ```bash
-agent-runner ui
+alcove ui
 ```
 
 `ui` acts as a thin launcher for the browser-first runtime and opens your browser.
@@ -155,16 +157,16 @@ agent-runner ui
 Direct CLI run:
 
 ```bash
-agent-runner run task.md --check "pytest -q"
+alcove run task.md --check "pytest -q"
 ```
 
 Inline task mode:
 
 ```bash
-agent-runner run --task "check this repo for docs and summarize the architecture"
+alcove run --task "check this repo for docs and summarize the architecture"
 ```
 
-By default, `agent-runner run` targets the current directory. Use `--repo` only when you want to point at another repository.
+By default, `alcove run` targets the current directory. Use `--repo` only when you want to point at another repository.
 
 ## Current capabilities
 
@@ -199,7 +201,7 @@ One-command setup:
 Then confirm the local environment is ready:
 
 ```bash
-agent-runner doctor
+alcove doctor
 ```
 
 Manual setup:
@@ -215,10 +217,16 @@ pip install -e ".[dev]"
 To launch the UI directly, use:
 
 ```bash
-./agent-runner.command
+./alcove.command
 ```
 
-Create a one-click desktop app icon named `agent-runner`:
+Refresh the editable install and rebuild clean launchers after pulling updates:
+
+```bash
+./scripts/refresh-local-install.sh
+```
+
+Install clean macOS launchers in `~/Applications` and `~/Desktop`:
 
 ```bash
 ./scripts/install-desktop-icon.sh
@@ -245,13 +253,15 @@ The web runtime serves:
 - `/studio/preview/...` for managed studio previews
 - `/play/...` for published studio artifacts
 
-`agent-runner web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
+`alcove web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
 
-`agent-runner serve` keeps `0.0.0.0` default binding for easier LAN access.
+`alcove serve` keeps `0.0.0.0` default binding for easier LAN access.
 
 Optional password protection is available with `--password` using HTTP basic auth.
 
-`agent-runner.command` defaults to web mode with `0.0.0.0` bind.
+`alcove.command` defaults to web mode with `0.0.0.0` bind.
+
+The launcher remembers the last good local URL for this repo and automatically picks the next free port if the old one is blocked by another process.
 
 If you want password protection for LAN or phone access, set `AGENT_RUNNER_WEB_PASSWORD` before launch.
 

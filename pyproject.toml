@@ -1,5 +1,5 @@
 [project]
-name = "agent-runner"
+name = "alcove"
 version = "0.1.0"
 description = "Browser-first workspace for steering Codex against local projects"
 readme = "README.md"
@@ -27,6 +27,7 @@ packaging = [
 ]
 
 [project.scripts]
+alcove = "agent_runner.cli:main"
 agent-runner = "agent_runner.cli:main"
 
 [tool.pytest.ini_options]

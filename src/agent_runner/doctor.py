@@ -73,10 +73,10 @@ def render_doctor_report(report: DoctorReport) -> str:
     lines.append("")
     if report.ok:
         lines.append("Ready to go.")
-        lines.append("Next: `agent-runner web`")
+        lines.append("Next: `alcove web`")
     else:
         lines.append("Setup is incomplete.")
-        lines.append("Fix the failed checks above, then re-run `agent-runner doctor`.")
+        lines.append("Fix the failed checks above, then re-run `alcove doctor`.")
     return "\n".join(lines)
 
 

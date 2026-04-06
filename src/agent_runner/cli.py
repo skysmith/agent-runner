@@ -16,7 +16,7 @@ from .service import AgentRunnerService, ServiceConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Codex agent loop v1.01")
+    parser = argparse.ArgumentParser(description="Alcove workspace runtime")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="Run the codex agent loop")
@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             runner = AgentRunner(config)
             outcome = runner.run()
         except (CodexError, ValueError) as exc:
-            print(f"[agent-runner] error: {exc}", file=sys.stderr)
+            print(f"[alcove] error: {exc}", file=sys.stderr)
             return 1
         print(
             json.dumps(
@@ -272,18 +272,18 @@ def main(argv: list[str] | None = None) -> int:
         password = (args.password or "").strip() or None
         server = create_server(service, host=args.host, port=args.port, access_password=password)
         info = server_info(args.host, server.server_port)
-        print(f"[agent-runner] Web runtime started on {info['bind_host']}:{info['bind_port']}")
-        print(f"[agent-runner] Local URL: {info['localhost_url']}")
+        print(f"[alcove] Web runtime started on {info['bind_host']}:{info['bind_port']}")
+        print(f"[alcove] Local URL: {info['localhost_url']}")
         if info.get("lan_url"):
-            print(f"[agent-runner] LAN URL: {info['lan_url']}")
+            print(f"[alcove] LAN URL: {info['lan_url']}")
         else:
-            print("[agent-runner] LAN URL: unavailable")
+            print("[alcove] LAN URL: unavailable")
         if info.get("tailscale_url"):
-            print(f"[agent-runner] Tailscale URL: {info['tailscale_url']}")
+            print(f"[alcove] Tailscale URL: {info['tailscale_url']}")
         if password:
-            print("[agent-runner] Access password is enabled.")
+            print("[alcove] Access password is enabled.")
         if info.get("localhost_only"):
-            print("[agent-runner] Note: bound to localhost only (LAN devices cannot connect).")
+            print("[alcove] Note: bound to localhost only (LAN devices cannot connect).")
         try:
             webbrowser.open(info["localhost_url"])
         except Exception:
@@ -319,18 +319,18 @@ def main(argv: list[str] | None = None) -> int:
         password = (args.password or "").strip() or None
         server = create_server(service, host=args.host, port=args.port, access_password=password)
         info = server_info(args.host, server.server_port)
-        print(f"[agent-runner] Web runtime started on {info['bind_host']}:{info['bind_port']}")
-        print(f"[agent-runner] Local URL: {info['localhost_url']}")
+        print(f"[alcove] Web runtime started on {info['bind_host']}:{info['bind_port']}")
+        print(f"[alcove] Local URL: {info['localhost_url']}")
         if info.get("lan_url"):
-            print(f"[agent-runner] LAN URL: {info['lan_url']}")
+            print(f"[alcove] LAN URL: {info['lan_url']}")
         else:
-            print("[agent-runner] LAN URL: unavailable")
+            print("[alcove] LAN URL: unavailable")
         if info.get("tailscale_url"):
-            print(f"[agent-runner] Tailscale URL: {info['tailscale_url']}")
+            print(f"[alcove] Tailscale URL: {info['tailscale_url']}")
         if password:
-            print("[agent-runner] Access password is enabled.")
+            print("[alcove] Access password is enabled.")
         if info.get("localhost_only"):
-            print("[agent-runner] Note: bound to localhost only (LAN devices cannot connect).")
+            print("[alcove] Note: bound to localhost only (LAN devices cannot connect).")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

@@ -81,7 +81,10 @@ if [[ -z "${PYTHON_BIN}" ]]; then
 fi
 
 cd "$REPO_PATH"
-LAUNCHER="${REPO_PATH}/agent-runner.command"
+LAUNCHER="${REPO_PATH}/alcove.command"
+if [[ ! -x "${LAUNCHER}" ]]; then
+  LAUNCHER="${REPO_PATH}/agent-runner.command"
+fi
 if [[ ! -x "${LAUNCHER}" ]]; then
   osascript -e 'display alert "Alcove" message "Launcher script is missing or not executable." as critical'
   exit 1

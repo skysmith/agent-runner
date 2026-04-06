@@ -21,7 +21,7 @@ pytest -q
 Launch the main runtime with:
 
 ```bash
-agent-runner web
+alcove web
 ```
 
 ## Ground Rules

@@ -58,7 +58,7 @@ def create_server(
         return payload
 
     class CompanionHandler(BaseHTTPRequestHandler):
-        server_version = "agent-runner-web/1.0"
+        server_version = "alcove-web/1.0"
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -603,7 +603,7 @@ def create_server(
                 return True
             if path.startswith("/api/"):
                 self.send_response(HTTPStatus.UNAUTHORIZED)
-                self.send_header("WWW-Authenticate", 'Basic realm="agent-runner"')
+                self.send_header("WWW-Authenticate", 'Basic realm="alcove"')
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 data = json.dumps({"detail": "Authentication required."}).encode("utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -611,7 +611,7 @@ def create_server(
                 self.wfile.write(data)
                 return False
             self.send_response(HTTPStatus.UNAUTHORIZED)
-            self.send_header("WWW-Authenticate", 'Basic realm="agent-runner"')
+            self.send_header("WWW-Authenticate", 'Basic realm="alcove"')
             data = b"Authentication required."
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))

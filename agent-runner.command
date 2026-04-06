@@ -41,7 +41,7 @@ run_doctor_check() {
   printf '%s\n' "$doctor_output" >&2
   if command -v osascript >/dev/null 2>&1; then
     osascript >/dev/null 2>&1 <<APPLESCRIPT &
-display dialog "Alcove found a local setup issue.\n\nThe app will still open, and you can run 'agent-runner doctor' in this repo for details." buttons {"OK"} default button "OK"
+display dialog "Alcove found a local setup issue.\n\nThe app will still open, and you can run 'alcove doctor' in this repo for details." buttons {"OK"} default button "OK"
 APPLESCRIPT
   fi
   return 0
@@ -89,22 +89,84 @@ APPLESCRIPT
 }
 
 WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
-WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
+DEFAULT_WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
 WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
-APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
-OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
-URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
+EXPLICIT_APP_URL="${AGENT_RUNNER_URL:-}"
+STATE_DIR="${SCRIPT_DIR}/.agent-runner"
+URL_FILE="${STATE_DIR}/web-url"
 
-{
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
-} >>"$LOG_FILE"
+mkdir -p "$STATE_DIR"
 
-mkdir -p "$(dirname "$URL_FILE")"
-printf '%s\n' "$APP_URL" >"$URL_FILE"
+read_saved_url() {
+  if [[ -n "$EXPLICIT_APP_URL" ]]; then
+    printf '%s\n' "$EXPLICIT_APP_URL"
+    return 0
+  fi
+  if [[ -f "$URL_FILE" ]]; then
+    local saved_url
+    saved_url="$(tr -d '\r' < "$URL_FILE")"
+    if [[ "$saved_url" == http://* || "$saved_url" == https://* ]]; then
+      printf '%s\n' "$saved_url"
+      return 0
+    fi
+  fi
+  printf 'http://127.0.0.1:%s\n' "$DEFAULT_WEB_PORT"
+}
+
+url_port() {
+  "$PYTHON_BIN" - "$1" "$DEFAULT_WEB_PORT" <<'PY'
+from __future__ import annotations
+
+import sys
+from urllib.parse import urlparse
+
+url = sys.argv[1].strip()
+fallback = int(sys.argv[2])
+try:
+    parsed = urlparse(url)
+    port = parsed.port
+except Exception:
+    port = None
+print(port or fallback)
+PY
+}
+
+pick_available_port() {
+  "$PYTHON_BIN" - "$WEB_HOST" "$1" <<'PY'
+from __future__ import annotations
+
+import socket
+import sys
+
+host = sys.argv[1]
+start_port = int(sys.argv[2])
+
+for candidate in range(start_port, start_port + 25):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, candidate))
+        except OSError:
+            continue
+    print(candidate)
+    sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+write_current_url() {
+  printf '%s\n' "$1" >"$URL_FILE"
+}
+
+build_open_url() {
+  local base_url="$1"
+  printf '%s%s_ar_open=%s\n' "$base_url" "$([[ "$base_url" == *\?* ]] && printf '&' || printf '?')" "$(date +%s)"
+}
 
 server_matches_expected() {
-  "$PYTHON_BIN" - "$APP_URL" "$WEB_PASSWORD" "$SCRIPT_DIR" <<'PY'
+  local candidate_url="$1"
+  "$PYTHON_BIN" - "$candidate_url" "$WEB_PASSWORD" "$SCRIPT_DIR" <<'PY'
 import base64
 import json
 import sys
@@ -129,13 +191,38 @@ sys.exit(0)
 PY
 }
 
-if server_matches_expected; then
+PREFERRED_URL="$(read_saved_url)"
+if server_matches_expected "$PREFERRED_URL"; then
+  write_current_url "$PREFERRED_URL"
+  OPEN_URL="$(build_open_url "$PREFERRED_URL")"
   open "$OPEN_URL"
   close_origin_terminal_session
   exit 0
 fi
 
-LAUNCH_CMD=( "$PYTHON_BIN" -m agent_runner web --repo "$SCRIPT_DIR" --host "$WEB_HOST" --port "$WEB_PORT" )
+PREFERRED_PORT="$(url_port "$PREFERRED_URL")"
+LAUNCH_PORT="$PREFERRED_PORT"
+if [[ -z "$EXPLICIT_APP_URL" && -z "${AGENT_RUNNER_WEB_PORT:-}" ]]; then
+  if ! LAUNCH_PORT="$(pick_available_port "$PREFERRED_PORT")"; then
+    echo "Could not find an open port for the Alcove web runtime." >&2
+    exit 1
+  fi
+fi
+
+APP_URL="${EXPLICIT_APP_URL:-http://127.0.0.1:${LAUNCH_PORT}}"
+OPEN_URL="$(build_open_url "$APP_URL")"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
+  if [[ "$LAUNCH_PORT" != "$PREFERRED_PORT" ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Port ${PREFERRED_PORT} was unavailable; using ${LAUNCH_PORT}"
+  fi
+} >>"$LOG_FILE"
+
+write_current_url "$APP_URL"
+
+LAUNCH_CMD=( "$PYTHON_BIN" -m agent_runner web --repo "$SCRIPT_DIR" --host "$WEB_HOST" --port "$LAUNCH_PORT" )
 if [[ -n "$WEB_PASSWORD" ]]; then
   LAUNCH_CMD+=( --password "$WEB_PASSWORD" )
 fi
@@ -144,7 +231,8 @@ APP_PID="$!"
 
 # Only close the originating terminal once the expected runtime is confirmed.
 for _ in $(seq 1 50); do
-  if server_matches_expected; then
+  if server_matches_expected "$APP_URL"; then
+    write_current_url "$APP_URL"
     open "$OPEN_URL"
     close_origin_terminal_session
     exit 0

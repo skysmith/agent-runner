@@ -1762,7 +1762,7 @@ def render_web_app() -> str:
               <div class="setup-banner-head">
                 <div>
                   <p class="setup-banner-title">Setup Needed</p>
-                  <p class="setup-banner-copy">This machine is missing something Alcove needs before Codex work can run. Fix the items below, then refresh this page or run <code>agent-runner doctor</code> in the repo.</p>
+                  <p class="setup-banner-copy">This machine is missing something Alcove needs before Codex work can run. Fix the items below, then refresh this page or run <code>alcove doctor</code> in the repo.</p>
                 </div>
                 <div class="setup-banner-actions">
                   <button type="button" onclick="hardRefresh()">Refresh</button>
@@ -2054,9 +2054,9 @@ def render_web_app() -> str:
             if (!workspaces.length) {
               host.innerHTML = `
                 <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                  <h2>Alcove Studio</h2>
-                  <p class="hero-copy">Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
-                  <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
+                  <h2>Alcove</h2>
+                  <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
+                  <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
                     <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
@@ -2068,9 +2068,9 @@ def render_web_app() -> str:
             }
             host.innerHTML = `
               <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                <h2>Alcove Studio</h2>
-                <p class="hero-copy">Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
-                <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
+                <h2>Alcove</h2>
+                <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
+                <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                 <div class="home-actions">
                   <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
                   <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
@@ -2107,21 +2107,21 @@ def render_web_app() -> str:
             return `
               <section class="home-shell">
                 <section class="home-panel">
-                  <h2>Alcove Studio</h2>
-                  <p>Pick a workspace, start a new Studio, or drop a local project folder here to map it into Alcove.</p>
+                  <h2>Bring in a project</h2>
+                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
                     <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
                   </div>
                   <div id="workspace-dropzone" class="dropzone">
-                    <strong>Drop a folder to create a mapped workspace</strong>
-                    <p class="dropzone-copy">Drag a project folder from Finder into Alcove and it will create a workspace pointing at that path.</p>
+                    <strong>Drop a folder to map a local project</strong>
+                    <p class="dropzone-copy">Drag a project folder from Finder into Alcove and it will create a workspace for that repo.</p>
                     <div class="dropzone-hint">Best on desktop. If the browser hides the file path, Alcove will ask you to paste it.</div>
                   </div>
                 </section>
                 <section class="home-panel">
                   <h3>Recent Workspaces</h3>
-                  <p>Jump back into the projects you were using most recently.</p>
+                  <p>Pick up where you left off.</p>
                   <section class="workspace-grid compact">
                     ${recent.length ? recent.map((workspace) => `
                       <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
@@ -2203,8 +2203,8 @@ def render_web_app() -> str:
               host.classList.remove('studio-scroll');
               if (actions) actions.innerHTML = '';
               if (eyebrow) eyebrow.textContent = 'Home';
-              if (title) title.textContent = 'Alcove Studio';
-              if (copy) copy.textContent = 'Bring a workspace into Alcove or start a new Studio.';
+              if (title) title.textContent = 'Bring in a project';
+              if (copy) copy.textContent = 'Open a repo or start a Studio. Preview, publish, and run details show up here.';
               host.innerHTML = renderHomePane();
               return;
             }
@@ -2540,7 +2540,7 @@ def render_web_app() -> str:
                     <span>Setup</span>
                     <span class="connection-state">Needs attention</span>
                   </div>
-                  <p class="connection-copy">Alcove detected a local setup issue. Run <code>agent-runner doctor</code> in this repo after fixing the items below.</p>
+                  <p class="connection-copy">Alcove detected a local setup issue. Run <code>alcove doctor</code> in this repo after fixing the items below.</p>
                   <div class="connection-meta">
                     ${(setupReport.checks || [])
                       .filter((check) => !check.ok)

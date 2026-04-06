@@ -23,7 +23,7 @@ def test_run_doctor_reports_success(monkeypatch, tmp_path: Path) -> None:
     assert report.ok is True
     rendered = render_doctor_report(report)
     assert "[PASS] Codex CLI" in rendered
-    assert "Next: `agent-runner web`" in rendered
+    assert "Next: `alcove web`" in rendered
 
 
 def test_run_doctor_reports_missing_codex(monkeypatch, tmp_path: Path) -> None:
