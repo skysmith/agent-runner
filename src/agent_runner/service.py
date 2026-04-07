@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections import deque
+from copy import deepcopy
 import json
 import re
 import subprocess
 import sys
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -17,7 +19,15 @@ from .conversation_store import ConversationStore, WorkspaceConversationControll
 from .doctor import run_doctor
 from .models import AssistantCapabilityMode, AppSettings, ChecksPolicy, ConversationRecord, ProviderKind, RunMode
 from .page_context import normalize_page_context
-from .providers import ExecutionRequest, PhaseExecutionClient, ProviderRouter, probe_ollama
+from .providers import (
+    ExecutionRequest,
+    PhaseExecutionClient,
+    ProviderRouter,
+    extract_prompt_screenshot_paths,
+    infer_provider_for_model,
+    model_supports_images,
+    probe_ollama,
+)
 from .run_coordinator import RunCoordinator, RunStatus
 from .runner import AgentRunner, RunnerConfig
 from .settings_store import load_app_settings, save_app_settings
@@ -34,6 +44,12 @@ from .studio import (
 )
 
 ServiceEventCallback = Callable[[str, str], None]
+ACTION_REQUEST_PATTERN = re.compile(
+    r"\b(add|adjust|apply|change|continue|edit|fix|implement|improve|make|patch|prevent|refactor|remove|rename|replace|set|stop|tweak|update|wire)\b"
+)
+READ_ONLY_MESSAGE_PATTERN = re.compile(
+    r"\b(analy[sz]e|describe|explain|inspect|review|summari[sz]e|tell me|walk me through|what|why|how)\b"
+)
 KNOWN_STUDIO_KINDS = frozenset({"studio_game", "studio_web", "studio_data", "studio_docs"})
 
 
@@ -51,6 +67,38 @@ class ServiceConfig:
     phase_timeout_seconds: int
     check_commands: list[str]
     dry_run: bool
+
+
+@dataclass(slots=True)
+class QueuedMessageRequest:
+    workspace_id: str
+    conversation_id: str
+    content: str
+    mode: RunMode
+    assistant_mode: AssistantCapabilityMode
+    page_context: dict[str, object]
+    provider: ProviderKind
+    model: str
+    workspace_repo_path: Path
+    max_step_retries: int | None = None
+    event_callback: ServiceEventCallback | None = None
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    queued_at: str = field(default_factory=lambda: _timestamp_now())
+
+    def status_payload(self, *, position: int) -> dict[str, object]:
+        preview = " ".join(self.content.split())
+        if len(preview) > 120:
+            preview = f"{preview[:117].rstrip()}..."
+        return {
+            "id": self.request_id,
+            "workspace_id": self.workspace_id,
+            "conversation_id": self.conversation_id,
+            "mode": str(self.mode),
+            "assistant_mode": str(self.assistant_mode),
+            "queued_at": self.queued_at,
+            "position": position,
+            "content_preview": preview,
+        }
 
 
 class AgentRunnerService:
@@ -84,6 +132,9 @@ class AgentRunnerService:
         self._events: list[dict[str, Any]] = []
         self._next_event_id = 1
         self._max_events = 2000
+        self._event_listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        self._queue_lock = threading.Lock()
+        self._pending_runs: deque[QueuedMessageRequest] = deque()
 
     def list_workspaces(self) -> list[dict[str, object]]:
         root = self.conversation_store.root
@@ -449,17 +500,6 @@ class AgentRunnerService:
         clean_text = content.strip()
         if not clean_text:
             raise ValueError("Message content cannot be empty.")
-        if not self.coordinator.try_start(
-            workspace_id,
-            conversation_id=conversation_id,
-            mode=str(mode),
-            run_id=str(uuid.uuid4()),
-            last_prompt=clean_text,
-        ):
-            status = self.coordinator.get_status()
-            raise RuntimeError(
-                f"Another workspace is running ({status.workspace_id or 'unknown'}). Please wait for it to finish."
-            )
 
         controller = self._controller(workspace_id)
         normalized_page_context = normalize_page_context(page_context)
@@ -472,81 +512,58 @@ class AgentRunnerService:
             )
         active_record = controller.active_conversation()
         effective_assistant_mode = active_record.assistant_mode
-        effective_page_context = active_record.page_context
+        effective_page_context = deepcopy(active_record.page_context)
         workspace_repo_path = self._workspace_repo_path(workspace_id)
         if mode == RunMode.LOOP and effective_assistant_mode != AssistantCapabilityMode.DEV:
-            self.coordinator.finish(workspace_id)
             raise ValueError("Loop mode requires dev assistant capability mode.")
-
-        user_record = controller.append_message(role="user", content=clean_text)
-        self._refresh_summary_if_needed(controller, user_record.id)
         resolved_provider, resolved_model = self._effective_provider_and_model(provider=provider, model=model)
-        effective_context = (
-            self.context_assembler.build_for_loop(
-                repo_path=workspace_repo_path,
-                provider=resolved_provider,
-                model=resolved_model,
-                run_mode=mode,
-                conversation=active_record,
-                current_input=clean_text,
-                assistant_mode=effective_assistant_mode,
-                page_context=effective_page_context,
-            )
-            if mode == RunMode.LOOP
-            else self.context_assembler.build_for_message(
-                repo_path=workspace_repo_path,
-                provider=resolved_provider,
-                model=resolved_model,
-                run_mode=mode,
-                conversation=active_record,
-                current_input=clean_text,
-                assistant_mode=effective_assistant_mode,
-                page_context=effective_page_context,
-            )
-        )
-
-        self.coordinator.update_status(
-            state="starting",
+        request = QueuedMessageRequest(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
-            mode=str(mode),
-            step="Sending message" if mode == RunMode.MESSAGE else "Getting ready",
-            error="",
-            last_error="",
-            stop_requested=False,
+            content=clean_text,
+            mode=mode,
+            assistant_mode=effective_assistant_mode,
+            page_context=effective_page_context,
+            provider=resolved_provider,
+            model=resolved_model,
+            workspace_repo_path=workspace_repo_path,
+            max_step_retries=max_step_retries,
+            event_callback=event_callback,
         )
-        self._emit_run_event("run.started")
-        self._emit_event(
-            "conversation.updated",
-            {
-                "workspace_id": workspace_id,
-                "conversation_id": conversation_id,
-            },
-        )
-
-        worker = threading.Thread(
-            target=self._run_background_interaction,
-            args=(
+        queued = False
+        queue_position = 0
+        should_start_now = False
+        with self._queue_lock:
+            if self._pending_runs:
+                self._pending_runs.append(request)
+                queued = True
+                queue_position = len(self._pending_runs)
+            elif self.coordinator.try_start(
                 workspace_id,
-                conversation_id,
-                clean_text,
-                mode,
-                effective_context,
-                resolved_provider,
-                resolved_model,
-                max_step_retries,
-                event_callback,
-                workspace_repo_path,
-            ),
-            daemon=True,
-        )
-        worker.start()
+                conversation_id=conversation_id,
+                mode=str(mode),
+                run_id=request.request_id,
+                last_prompt=clean_text,
+            ):
+                should_start_now = True
+            else:
+                self._pending_runs.append(request)
+                queued = True
+                queue_position = len(self._pending_runs)
+
+        if queued:
+            self._emit_run_event("run.queued")
+        elif should_start_now:
+            self._start_message_request(request)
+
         return {
             "accepted": True,
             "workspace_id": workspace_id,
             "conversation_id": conversation_id,
             "mode": str(mode),
             "assistant_mode": str(effective_assistant_mode),
+            "queued": queued,
+            "queue_position": queue_position,
         }
 
     def update_conversation_context(
@@ -578,10 +595,10 @@ class AgentRunnerService:
     def stop_run(self) -> dict[str, object]:
         status = self.coordinator.get_status()
         if status.state not in {"starting", "running", "stopping"}:
-            return status.to_dict()
+            return self.get_run_status()
         updated = self.coordinator.request_stop().to_dict()
         self._emit_run_event("run.stop_requested", status=updated)
-        return updated
+        return self.get_run_status()
 
     def recover_run(self) -> dict[str, object]:
         status = self.coordinator.get_status()
@@ -589,7 +606,7 @@ class AgentRunnerService:
             raise RuntimeError("Run is active. Stop it before running stale recovery.")
         recovered = self.coordinator.recover_stale_run().to_dict()
         self._emit_run_event("run.recovered", status=recovered)
-        return recovered
+        return self.get_run_status()
 
     def retry_last_prompt(self) -> dict[str, object]:
         status = self.coordinator.get_status()
@@ -622,7 +639,11 @@ class AgentRunnerService:
         )
 
     def get_run_status(self) -> dict[str, object]:
-        return self.coordinator.get_status().to_dict()
+        status = self.coordinator.get_status().to_dict()
+        queued_runs = self._queued_runs_payload()
+        status["queue_count"] = len(queued_runs)
+        status["queued_runs"] = queued_runs
+        return status
 
     def get_settings(self) -> dict[str, object]:
         settings = self.app_settings
@@ -633,6 +654,7 @@ class AgentRunnerService:
             "planner_model": settings.planner_model,
             "builder_model": settings.builder_model,
             "reviewer_model": settings.reviewer_model,
+            "vision_model": settings.vision_model,
             "ollama_host": settings.ollama_host,
             "max_step_retries": settings.max_step_retries,
             "phase_timeout_seconds": settings.phase_timeout_seconds,
@@ -658,6 +680,7 @@ class AgentRunnerService:
         settings.planner_model = _optional_text(payload.get("planner_model"), settings.planner_model)
         settings.builder_model = _optional_text(payload.get("builder_model"), settings.builder_model)
         settings.reviewer_model = _optional_text(payload.get("reviewer_model"), settings.reviewer_model)
+        settings.vision_model = _optional_text(payload.get("vision_model"), settings.vision_model)
         ollama_host = str(payload.get("ollama_host", settings.ollama_host)).strip()
         if ollama_host:
             settings.ollama_host = ollama_host
@@ -698,6 +721,10 @@ class AgentRunnerService:
                 record = None
         latest = self._latest_operational_message(record)
         extracted = self._extract_review_fields(latest)
+        queued_runs = self._queued_runs_payload(
+            workspace_id=resolved_workspace_id,
+            conversation_id=conversation_id,
+        )
         return {
             "conversation_id": conversation_id,
             "workspace_id": resolved_workspace_id,
@@ -714,11 +741,17 @@ class AgentRunnerService:
                 "active_workspace_id": status.get("workspace_id"),
                 "active_conversation_id": status.get("conversation_id"),
                 "last_error": status.get("last_error") or status.get("error"),
+                "queue_count": status.get("queue_count", 0),
             },
             "latest_result": {
                 "phase": latest.phase if latest else None,
                 "content": latest.content if latest else "",
                 "created_at": latest.created_at if latest else None,
+            },
+            "queue": {
+                "count": len(queued_runs),
+                "items": queued_runs,
+                "global_count": status.get("queue_count", 0),
             },
             "summary": extracted.get("summary", ""),
             "changed_files": extracted.get("changed_files", []),
@@ -741,6 +774,9 @@ class AgentRunnerService:
                 "next_cursor": next_cursor,
             }
 
+    def add_event_listener(self, listener: Callable[[str, dict[str, Any]], None]) -> None:
+        self._event_listeners.append(listener)
+
     def _run_background_interaction(
         self,
         workspace_id: str,
@@ -748,6 +784,7 @@ class AgentRunnerService:
         prompt: str,
         mode: RunMode,
         effective_context,
+        assistant_mode: AssistantCapabilityMode,
         provider: ProviderKind,
         model: str,
         max_step_retries: int | None,
@@ -762,14 +799,24 @@ class AgentRunnerService:
         )
         heartbeat_worker.start()
         try:
+            execute_dev_message = self._should_execute_dev_message(
+                assistant_mode=assistant_mode,
+                prompt=prompt,
+                provider=provider,
+                model=model,
+            )
             self.coordinator.update_status(
                 state="running",
-                step="Sending message" if mode == RunMode.MESSAGE else "Starting loop",
+                step=(
+                    "Starting dev pass"
+                    if mode == RunMode.MESSAGE and execute_dev_message
+                    else ("Sending message" if mode == RunMode.MESSAGE else "Starting loop")
+                ),
                 error="",
                 last_error="",
             )
             self._emit_run_event("run.state_changed")
-            if mode == RunMode.MESSAGE:
+            if mode == RunMode.MESSAGE and not execute_dev_message:
                 self._run_message_mode(
                     workspace_id=workspace_id,
                     conversation_id=conversation_id,
@@ -805,7 +852,11 @@ class AgentRunnerService:
                 reviewer_model=global_settings.reviewer_model,
                 ollama_host=global_settings.ollama_host,
                 extra_access_dir=global_settings.extra_access_dir,
-                max_step_retries=max(0, max_step_retries if max_step_retries is not None else global_settings.max_step_retries),
+                max_step_retries=(
+                    0
+                    if mode == RunMode.MESSAGE
+                    else max(0, max_step_retries if max_step_retries is not None else global_settings.max_step_retries)
+                ),
                 phase_timeout_seconds=global_settings.phase_timeout_seconds,
                 check_commands=check_commands,
                 conversation_context=effective_context.conversation_context,
@@ -832,7 +883,6 @@ class AgentRunnerService:
                 stop_requested=False,
             )
             self._emit_run_event("run.succeeded" if outcome.ok else "run.failed")
-            self.coordinator.finish(workspace_id)
             if event_callback:
                 event_callback("done", outcome.final_message or outcome.reason or "Complete")
         except Exception as exc:
@@ -850,11 +900,96 @@ class AgentRunnerService:
                 stop_requested=False,
             )
             self._emit_run_event("run.failed")
-            self.coordinator.finish(workspace_id)
             if event_callback:
                 event_callback("error", str(exc))
         finally:
             heartbeat_stop.set()
+            self._finish_active_run(workspace_id)
+
+    def _start_message_request(self, request: QueuedMessageRequest) -> None:
+        controller = self._controller(request.workspace_id)
+        controller.select_conversation(request.conversation_id)
+        user_record = controller.append_message(role="user", content=request.content)
+        self._refresh_summary_if_needed(controller, user_record.id)
+        active_record = controller.active_conversation()
+        effective_context = (
+            self.context_assembler.build_for_loop(
+                repo_path=request.workspace_repo_path,
+                provider=request.provider,
+                model=request.model,
+                run_mode=request.mode,
+                conversation=active_record,
+                current_input=request.content,
+                assistant_mode=request.assistant_mode,
+                page_context=request.page_context,
+            )
+            if request.mode == RunMode.LOOP
+            else self.context_assembler.build_for_message(
+                repo_path=request.workspace_repo_path,
+                provider=request.provider,
+                model=request.model,
+                run_mode=request.mode,
+                conversation=active_record,
+                current_input=request.content,
+                assistant_mode=request.assistant_mode,
+                page_context=request.page_context,
+            )
+        )
+        self.coordinator.update_status(
+            state="starting",
+            workspace_id=request.workspace_id,
+            conversation_id=request.conversation_id,
+            mode=str(request.mode),
+            step="Sending message" if request.mode == RunMode.MESSAGE else "Getting ready",
+            error="",
+            last_error="",
+            stop_requested=False,
+        )
+        self._emit_run_event("run.started")
+        self._emit_event(
+            "conversation.updated",
+            {
+                "workspace_id": request.workspace_id,
+                "conversation_id": request.conversation_id,
+            },
+        )
+        worker = threading.Thread(
+            target=self._run_background_interaction,
+            args=(
+                request.workspace_id,
+                request.conversation_id,
+                request.content,
+                request.mode,
+                effective_context,
+                request.assistant_mode,
+                request.provider,
+                request.model,
+                request.max_step_retries,
+                request.event_callback,
+                request.workspace_repo_path,
+            ),
+            daemon=True,
+        )
+        worker.start()
+
+    def _finish_active_run(self, workspace_id: str) -> None:
+        next_request: QueuedMessageRequest | None = None
+        with self._queue_lock:
+            self.coordinator.finish(workspace_id)
+            if self._pending_runs:
+                candidate = self._pending_runs.popleft()
+                if self.coordinator.try_start(
+                    candidate.workspace_id,
+                    conversation_id=candidate.conversation_id,
+                    mode=str(candidate.mode),
+                    run_id=candidate.request_id,
+                    last_prompt=candidate.content,
+                ):
+                    next_request = candidate
+                else:
+                    self._pending_runs.appendleft(candidate)
+        if next_request is not None:
+            self._start_message_request(next_request)
 
     def _run_message_mode(
         self,
@@ -867,6 +1002,12 @@ class AgentRunnerService:
         workspace_repo_path: Path,
     ) -> None:
         self._handle_runner_status("Phase: message", None)
+        response_model = self._effective_message_model(
+            provider=provider,
+            model=model,
+            prompt=effective_context.current_input,
+        )
+        response_provider = infer_provider_for_model(response_model, provider)
         schema = {
             "type": "object",
             "additionalProperties": False,
@@ -875,9 +1016,9 @@ class AgentRunnerService:
         }
         response = self.phase_client.run(
             ExecutionRequest(
-                provider=provider,
+                provider=response_provider,
                 codex_bin=self.app_settings.codex_bin,
-                model=model,
+                model=response_model,
                 prompt=(
                     "You are a concise coding assistant for this repository. "
                     "Respond to the user's message directly. Do not perform iterative planning/build/review loops. "
@@ -913,7 +1054,36 @@ class AgentRunnerService:
             stop_requested=False,
         )
         self._emit_run_event("run.succeeded")
-        self.coordinator.finish(workspace_id)
+
+    def _effective_message_model(self, *, provider: ProviderKind, model: str, prompt: str) -> str:
+        if provider != ProviderKind.OLLAMA:
+            return model
+        if not extract_prompt_screenshot_paths(prompt):
+            return model
+        if model_supports_images(model):
+            return model
+        vision_model = (self.app_settings.vision_model or "").strip()
+        if vision_model and model_supports_images(vision_model):
+            return vision_model
+        reviewer_model = (self.app_settings.reviewer_model or "").strip()
+        if reviewer_model and model_supports_images(reviewer_model):
+            return reviewer_model
+        return model
+
+    def _should_execute_dev_message(
+        self,
+        *,
+        assistant_mode: AssistantCapabilityMode,
+        prompt: str,
+        provider: ProviderKind,
+        model: str,
+    ) -> bool:
+        if assistant_mode != AssistantCapabilityMode.DEV:
+            return False
+        if not _looks_like_action_request(prompt):
+            return False
+        builder_model = (self.app_settings.builder_model or model).strip() or model
+        return infer_provider_for_model(builder_model, provider) == ProviderKind.CODEX
 
     def _append_loop_result(
         self,
@@ -1351,12 +1521,39 @@ class AgentRunnerService:
         return candidate
 
     def _emit_run_event(self, event_type: str, *, status: dict[str, object] | None = None) -> None:
+        if status is None:
+            payload_status = self.get_run_status()
+        else:
+            queued_runs = self._queued_runs_payload()
+            payload_status = {
+                **status,
+                "queue_count": len(queued_runs),
+                "queued_runs": queued_runs,
+            }
         payload = {
-            "status": status if status is not None else self.get_run_status(),
+            "status": payload_status,
         }
         self._emit_event(event_type, payload)
 
+    def _queued_runs_payload(
+        self,
+        *,
+        workspace_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self._queue_lock:
+            queued = list(self._pending_runs)
+        payloads: list[dict[str, object]] = []
+        for position, item in enumerate(queued, start=1):
+            if workspace_id and item.workspace_id != workspace_id:
+                continue
+            if conversation_id and item.conversation_id != conversation_id:
+                continue
+            payloads.append(item.status_payload(position=position))
+        return payloads
+
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        listeners = list(self._event_listeners)
         with self._event_lock:
             event = {
                 "id": str(self._next_event_id),
@@ -1369,6 +1566,11 @@ class AgentRunnerService:
             if len(self._events) > self._max_events:
                 overflow = len(self._events) - self._max_events
                 self._events = self._events[overflow:]
+        for listener in listeners:
+            try:
+                listener(event_type, payload)
+            except Exception:
+                continue
 
     def _latest_operational_message(self, record: ConversationRecord | None):
         if record is None:
@@ -1454,6 +1656,17 @@ def _optional_text(value: object, fallback: str | None = None) -> str | None:
         text = value.strip()
         return text or None
     return fallback
+
+
+def _looks_like_action_request(prompt: str) -> bool:
+    text = prompt.strip().lower()
+    if not text:
+        return False
+    if re.fullmatch(r"(continue|go ahead|keep going|carry on|please continue|yes)", text):
+        return True
+    if ACTION_REQUEST_PATTERN.search(text):
+        return True
+    return bool(not READ_ONLY_MESSAGE_PATTERN.search(text) and "please" in text)
 
 
 def _repo_activity_metadata(repo_path: Path) -> dict[str, object] | None:

@@ -164,6 +164,7 @@ class AppSettings:
     planner_model: str | None = None
     builder_model: str | None = None
     reviewer_model: str | None = None
+    vision_model: str | None = None
     codex_bin: str = "codex"
     ollama_host: str = "http://127.0.0.1:11434"
     extra_access_dir: Path | None = None

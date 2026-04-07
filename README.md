@@ -238,6 +238,8 @@ For faster local iteration, there is also a thin dev-wrapper build:
 ./scripts/build-dev-mac-app.sh
 ```
 
+Use port `8765` for local build and launcher validation. Leave `AGENT_RUNNER_WEB_PORT` unset for normal builds so the wrapper stays on the standard port.
+
 Build the standalone packaged mac app:
 
 ```bash
@@ -261,7 +263,7 @@ Optional password protection is available with `--password` using HTTP basic aut
 
 `alcove.command` defaults to web mode with `0.0.0.0` bind.
 
-The launcher remembers the last good local URL for this repo and automatically picks the next free port if the old one is blocked by another process.
+The standard local runtime port is `8765`. Build, launcher, and smoke-test docs in this repo assume that port and should not be switched during normal local use.
 
 If you want password protection for LAN or phone access, set `AGENT_RUNNER_WEB_PASSWORD` before launch.
 

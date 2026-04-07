@@ -68,7 +68,7 @@ Useful service commands:
 
 ## Local UI vs Hosted UI
 
-- Local development UI (this repo): run `agent-runner web` locally.
+- Local development UI (this repo): run `agent-runner web` locally on port `8765`.
 - Hosted shareable UI: use the Tailscale URL on `8766` with Basic Auth.
 
 Both desktop and mobile clients should use the same hosted URL; mobile layout is handled by responsive UI behavior in the web app.

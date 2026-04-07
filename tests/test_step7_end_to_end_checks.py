@@ -219,30 +219,11 @@ def test_launcher_script_ignores_stale_web_url_and_rewrites_localhost(tmp_path: 
     assert f"http://127.0.0.1:{port}" in open_log.read_text(encoding="utf-8")
 
 
-def test_launcher_script_uses_next_free_port_when_saved_port_is_busy(tmp_path: Path) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        busy_port = probe.getsockname()[1]
-
-    busy_server = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(busy_port)],
-        cwd=tmp_path,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        time.sleep(0.2)
-        assert busy_server.poll() is None
-
-        next_port = busy_port + 1
-        while True:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
-                try:
-                    candidate.bind(("127.0.0.1", next_port))
-                except OSError:
-                    next_port += 1
-                    continue
-            break
+def test_launcher_script_keeps_requested_port_when_it_is_busy(tmp_path: Path) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy_socket:
+        busy_socket.bind(("127.0.0.1", 0))
+        busy_socket.listen(1)
+        busy_port = busy_socket.getsockname()[1]
 
         repo_root = Path(__file__).resolve().parents[1]
         launcher_src = repo_root / "agent-runner.command"
@@ -342,6 +323,7 @@ def test_launcher_script_uses_next_free_port_when_saved_port_is_busy(tmp_path: P
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["TMP_OPEN_LOG"] = str(open_log)
         env["TMP_PYTHON_LOG"] = str(tmp_path / "python.log")
+        env["AGENT_RUNNER_WEB_PORT"] = str(busy_port)
 
         completed = subprocess.run(
             ["/bin/bash", str(launcher_dst)],
@@ -352,13 +334,11 @@ def test_launcher_script_uses_next_free_port_when_saved_port_is_busy(tmp_path: P
             check=False,
             timeout=5,
         )
-        assert completed.returncode == 0, completed.stderr
-        assert (state_dir / "web-url").read_text(encoding="utf-8").strip() == f"http://127.0.0.1:{next_port}"
-        assert f"http://127.0.0.1:{next_port}" in open_log.read_text(encoding="utf-8")
-        assert f"--port {next_port}" in (tmp_path / "python.log").read_text(encoding="utf-8")
-    finally:
-        busy_server.terminate()
-        busy_server.wait(timeout=5)
+        assert completed.returncode != 0
+        assert f"http://127.0.0.1:{busy_port}" in completed.stderr
+        assert (state_dir / "web-url").read_text(encoding="utf-8").strip() == f"http://127.0.0.1:{busy_port}"
+        assert not open_log.exists()
+        assert f"--port {busy_port}" in (tmp_path / "python.log").read_text(encoding="utf-8")
 
 
 def test_launcher_script_warns_but_continues_when_doctor_fails(tmp_path: Path) -> None:
@@ -453,9 +433,19 @@ def test_launcher_script_warns_but_continues_when_doctor_fails(tmp_path: Path) -
     )
     fake_open.chmod(0o755)
 
+    osa_log = tmp_path / "osascript.log"
+    fake_osascript = bin_dir / "osascript"
+    fake_osascript.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"${TMP_OSA_LOG:?}\"\n",
+        encoding="utf-8",
+    )
+    fake_osascript.chmod(0o755)
+
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["AGENT_RUNNER_WEB_PORT"] = port
+    env["TMP_OSA_LOG"] = str(osa_log)
 
     completed = subprocess.run(
         ["/bin/bash", str(launcher_dst)],
@@ -468,6 +458,7 @@ def test_launcher_script_warns_but_continues_when_doctor_fails(tmp_path: Path) -
     )
     assert completed.returncode == 0
     assert "Setup is incomplete." in completed.stderr
+    assert not osa_log.exists()
 
 
 def test_combined_session_flow_for_update_badge_reload_queue_and_tab_bar_visibility() -> None:

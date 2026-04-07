@@ -3,6 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+for extra_path in \
+  "$HOME/.npm-global/bin" \
+  "$HOME/.local/bin" \
+  "$HOME/.volta/bin" \
+  "$HOME/.yarn/bin" \
+  "$HOME/.cargo/bin" \
+  "/opt/homebrew/bin" \
+  "/usr/local/bin"; do
+  if [[ -d "$extra_path" && ":${PATH:-}:" != *":$extra_path:"* ]]; then
+    PATH="${PATH:+$PATH:}$extra_path"
+  fi
+done
+export PATH
 TTY_PATH="$(tty || true)"
 TERM_PROGRAM_NAME="${TERM_PROGRAM:-}"
 LOG_DIR="${SCRIPT_DIR}/.agent-runner/logs"
@@ -39,11 +52,6 @@ run_doctor_check() {
     printf '%s\n' "$doctor_output"
   } >>"$LOG_FILE"
   printf '%s\n' "$doctor_output" >&2
-  if command -v osascript >/dev/null 2>&1; then
-    osascript >/dev/null 2>&1 <<APPLESCRIPT &
-display dialog "Alcove found a local setup issue.\n\nThe app will still open, and you can run 'alcove doctor' in this repo for details." buttons {"OK"} default button "OK"
-APPLESCRIPT
-  fi
   return 0
 }
 run_doctor_check
@@ -102,14 +110,6 @@ read_saved_url() {
     printf '%s\n' "$EXPLICIT_APP_URL"
     return 0
   fi
-  if [[ -f "$URL_FILE" ]]; then
-    local saved_url
-    saved_url="$(tr -d '\r' < "$URL_FILE")"
-    if [[ "$saved_url" == http://* || "$saved_url" == https://* ]]; then
-      printf '%s\n' "$saved_url"
-      return 0
-    fi
-  fi
   printf 'http://127.0.0.1:%s\n' "$DEFAULT_WEB_PORT"
 }
 
@@ -128,30 +128,6 @@ try:
 except Exception:
     port = None
 print(port or fallback)
-PY
-}
-
-pick_available_port() {
-  "$PYTHON_BIN" - "$WEB_HOST" "$1" <<'PY'
-from __future__ import annotations
-
-import socket
-import sys
-
-host = sys.argv[1]
-start_port = int(sys.argv[2])
-
-for candidate in range(start_port, start_port + 25):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind((host, candidate))
-        except OSError:
-            continue
-    print(candidate)
-    sys.exit(0)
-
-sys.exit(1)
 PY
 }
 
@@ -202,22 +178,12 @@ fi
 
 PREFERRED_PORT="$(url_port "$PREFERRED_URL")"
 LAUNCH_PORT="$PREFERRED_PORT"
-if [[ -z "$EXPLICIT_APP_URL" && -z "${AGENT_RUNNER_WEB_PORT:-}" ]]; then
-  if ! LAUNCH_PORT="$(pick_available_port "$PREFERRED_PORT")"; then
-    echo "Could not find an open port for the Alcove web runtime." >&2
-    exit 1
-  fi
-fi
-
 APP_URL="${EXPLICIT_APP_URL:-http://127.0.0.1:${LAUNCH_PORT}}"
 OPEN_URL="$(build_open_url "$APP_URL")"
 
 {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
-  if [[ "$LAUNCH_PORT" != "$PREFERRED_PORT" ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Port ${PREFERRED_PORT} was unavailable; using ${LAUNCH_PORT}"
-  fi
 } >>"$LOG_FILE"
 
 write_current_url "$APP_URL"
@@ -238,7 +204,7 @@ for _ in $(seq 1 50); do
     exit 0
   fi
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    echo "Failed to start Alcove web runtime. See ${LOG_FILE} for details." >&2
+    echo "Failed to start Alcove web runtime on ${APP_URL}. Keep Alcove on its configured port or set AGENT_RUNNER_WEB_PORT intentionally. See ${LOG_FILE} for details." >&2
     exit 1
   fi
   sleep 0.1

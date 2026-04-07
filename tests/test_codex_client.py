@@ -52,6 +52,8 @@ def test_run_codex_json_includes_sandbox_and_add_dir(monkeypatch, tmp_path: Path
     extra_dir = tmp_path / "extra"
     extra_dir.mkdir()
 
+    monkeypatch.setattr("agent_runner.codex_client.resolve_executable_path", lambda name: f"/usr/local/bin/{name}")
+
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(
@@ -87,7 +89,10 @@ def test_run_codex_json_invokes_js_entrypoint_via_node(monkeypatch, tmp_path: Pa
     codex_shim = tmp_path / "codex"
     codex_shim.symlink_to(codex_js)
 
-    monkeypatch.setattr("agent_runner.codex_client.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else str(codex_shim))
+    monkeypatch.setattr(
+        "agent_runner.codex_client.resolve_executable_path",
+        lambda name: "/usr/local/bin/node" if name == "node" else str(codex_shim),
+    )
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
@@ -116,3 +121,37 @@ def test_run_codex_json_invokes_js_entrypoint_via_node(monkeypatch, tmp_path: Pa
         assert cmd[2:4] == ["/usr/local/bin/node", str(codex_js)]
     else:
         assert cmd[:2] == ["/usr/local/bin/node", str(codex_js)]
+
+
+def test_run_codex_json_resolves_codex_from_common_launch_paths(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    monkeypatch.setattr(
+        "agent_runner.codex_client.resolve_executable_path",
+        lambda name: str(codex_bin) if name == "codex" else None,
+    )
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='{"final_output":{"ok":true}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agent_runner.codex_client.subprocess.run", fake_run)
+
+    result = run_codex_json(
+        codex_bin="codex",
+        prompt="{}",
+        schema={"type": "object"},
+        repo_path=tmp_path,
+        timeout_seconds=1,
+        phase_name="planner",
+    )
+
+    assert result.payload == {"ok": True}
+    assert captured["cmd"][0] == str(codex_bin)

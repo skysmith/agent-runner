@@ -5,6 +5,12 @@ from html import escape
 from .service import AgentRunnerService
 
 
+_LOCKED_VIEWPORT = (
+    "width=device-width, initial-scale=1, maximum-scale=1, "
+    "user-scalable=no, viewport-fit=cover"
+)
+
+
 def render_workspaces(service: AgentRunnerService) -> str:
     rows = []
     for workspace in service.list_workspaces():
@@ -175,7 +181,7 @@ def render_web_app() -> str:
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="viewport" content="__LOCKED_VIEWPORT__" />
         <title>Alcove</title>
         <style>
           :root {
@@ -1027,9 +1033,37 @@ def render_web_app() -> str:
             padding: 8px 10px;
             border-bottom: 1px solid var(--line-soft);
           }
+          .studio-preview-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
           .studio-preview-label {
             font-size: 11px;
             color: var(--muted);
+          }
+          .studio-preview-link-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            background: #f7faf8;
+          }
+          .studio-preview-link-copy {
+            font-size: 11px;
+            color: var(--muted);
+            flex: 1 1 260px;
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+          .studio-preview-link-copy strong {
+            color: var(--ink);
+            font-weight: 600;
           }
           .studio-preview-frame {
             width: 100%;
@@ -1317,10 +1351,17 @@ def render_web_app() -> str:
               grid-template-columns: 1fr;
             }
             .composer {
-              --composer-action-space: 108px;
+              --composer-action-space: 76px;
             }
             .composer textarea {
               min-height: 92px;
+              font-size: 16px;
+            }
+            .context-grid input,
+            .settings-body input,
+            .settings-body select,
+            .settings-body textarea {
+              font-size: 16px;
             }
             .composer-server-dot {
               top: 14px;
@@ -1332,6 +1373,9 @@ def render_web_app() -> str:
               right: 10px;
               bottom: 10px;
               gap: 6px;
+            }
+            .mobile-hide {
+              display: none !important;
             }
             .icon-button, .send-fab {
               width: 30px;
@@ -1366,10 +1410,7 @@ def render_web_app() -> str:
               padding: 4px 6px;
             }
             .composer {
-              --composer-action-space: 86px;
-            }
-            .composer textarea {
-              font-size: 13px;
+              --composer-action-space: 64px;
             }
             .composer-actions {
               right: 8px;
@@ -1411,8 +1452,6 @@ def render_web_app() -> str:
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">Workspace</p>
-                    <button class="menu-item" type="button" onclick="createWorkspace()">Add Workspace</button>
-                    <button class="menu-item" type="button" onclick="importActiveRepositories()">Top Repos</button>
                     <button class="menu-item" type="button" onclick="clearConversation()">Clear Chat</button>
                     <button class="menu-item" type="button" onclick="stopRun()">Stop Run</button>
                   </section>
@@ -1442,7 +1481,7 @@ def render_web_app() -> str:
                       <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
                       <div class="composer-actions">
                         <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
-                        <button id="voice-button" class="icon-button" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
+                        <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
                         <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
                       </div>
                       <input id="composer-attachments" type="file" accept="image/*" multiple hidden onchange="onComposerFilesChanged()" />
@@ -1519,6 +1558,9 @@ def render_web_app() -> str:
                 </label>
                 <label>Reviewer model (optional)
                   <select id="settings-reviewer-model"></select>
+                </label>
+                <label>Vision model (optional)
+                  <select id="settings-vision-model"></select>
                 </label>
                 <label>Max step retries
                   <input id="settings-max-step-retries" type="number" min="0" step="1" />
@@ -1617,6 +1659,9 @@ def render_web_app() -> str:
             ],
           };
           const PANE_WIDTH_STORAGE_KEY = 'alcove-chat-pane-width';
+          const COMPOSER_MODE_STORAGE_KEY = 'alcove-composer-mode-preferences';
+          const WORKSPACE_SELECTION_STORAGE_KEY = 'alcove-selected-workspace';
+          const CONVERSATION_SELECTION_STORAGE_KEY = 'alcove-selected-conversation';
           let paneResizeState = null;
           let dropDepth = 0;
 
@@ -1626,6 +1671,87 @@ def render_web_app() -> str:
 
           function isMobileViewport() {
             return window.matchMedia('(max-width: 880px)').matches;
+          }
+
+          function normalizeComposerMode(value) {
+            return value === 'loop' ? 'loop' : 'message';
+          }
+
+          function composerModePreferenceKey() {
+            return state.workspaceId || state.workspace?.id || 'global';
+          }
+
+          function readComposerModePreferences() {
+            try {
+              const raw = window.localStorage.getItem(COMPOSER_MODE_STORAGE_KEY);
+              const parsed = raw ? JSON.parse(raw) : {};
+              return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (_) {
+              return {};
+            }
+          }
+
+          function writeComposerModePreferences(preferences) {
+            try {
+              window.localStorage.setItem(COMPOSER_MODE_STORAGE_KEY, JSON.stringify(preferences));
+            } catch (_) {}
+          }
+
+          function preferredComposerMode() {
+            const preferences = readComposerModePreferences();
+            const workspaceKey = composerModePreferenceKey();
+            return normalizeComposerMode(preferences[workspaceKey] || preferences.global || 'message');
+          }
+
+          function rememberComposerMode(mode) {
+            const normalized = normalizeComposerMode(mode);
+            const preferences = readComposerModePreferences();
+            const workspaceKey = composerModePreferenceKey();
+            preferences.global = normalized;
+            preferences[workspaceKey] = normalized;
+            writeComposerModePreferences(preferences);
+          }
+
+          function rememberWorkspaceSelection() {
+            try {
+              if (state.workspaceId) {
+                window.localStorage.setItem(WORKSPACE_SELECTION_STORAGE_KEY, state.workspaceId);
+              }
+              if (state.conversationId) {
+                window.localStorage.setItem(CONVERSATION_SELECTION_STORAGE_KEY, state.conversationId);
+              }
+            } catch (_) {}
+          }
+
+          function clearRememberedWorkspaceSelection() {
+            try {
+              window.localStorage.removeItem(WORKSPACE_SELECTION_STORAGE_KEY);
+              window.localStorage.removeItem(CONVERSATION_SELECTION_STORAGE_KEY);
+            } catch (_) {}
+          }
+
+          function requestedWorkspaceSelection() {
+            const params = new URLSearchParams(window.location.search);
+            const workspaceId = (params.get('workspace_id') || '').trim();
+            const conversationId = (params.get('conversation_id') || '').trim();
+            return {
+              fromUrl: params.has('workspace_id') || params.has('conversation_id'),
+              workspaceId: workspaceId || null,
+              conversationId: conversationId || null,
+            };
+          }
+
+          function applyComposerMode(mode, rememberPreference = false) {
+            const preferred = normalizeComposerMode(mode);
+            const resolved = preferred === 'loop' && state.assistantMode !== 'dev' ? 'message' : preferred;
+            const composerMode = document.getElementById('composer-mode');
+            if (composerMode) composerMode.value = resolved;
+            const modeMessage = document.getElementById('menu-mode-message');
+            const modeLoop = document.getElementById('menu-mode-loop');
+            if (modeMessage) modeMessage.classList.toggle('active', resolved === 'message');
+            if (modeLoop) modeLoop.classList.toggle('active', resolved === 'loop');
+            if (rememberPreference) rememberComposerMode(preferred);
+            return resolved;
           }
 
           function openMobilePane(which) {
@@ -1807,9 +1933,8 @@ def render_web_app() -> str:
           }
 
           function updateControls() {
-            const active = isActiveState(state.runStatus.state);
             const hasConversation = Boolean(state.conversationId && state.workspaceId);
-            const busy = active || state.submitting;
+            const busy = state.submitting;
             const ids = ['attach-button', 'voice-button', 'send-button'];
             for (const id of ids) {
               const el = document.getElementById(id);
@@ -1924,6 +2049,35 @@ def render_web_app() -> str:
             const date = new Date(value);
             if (Number.isNaN(date.valueOf())) return value;
             return date.toLocaleString();
+          }
+
+          function parseTimestamp(value) {
+            if (!value) return null;
+            const date = new Date(value);
+            return Number.isNaN(date.valueOf()) ? null : date;
+          }
+
+          function formatElapsedDuration(milliseconds) {
+            const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+            if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+            return `${seconds}s`;
+          }
+
+          function currentRunElapsedLabel(status) {
+            const stateText = String(status?.state || 'idle');
+            const startedAt = parseTimestamp(status?.started_at || status?.updated_at || status?.heartbeat_at);
+            if (!startedAt) return '';
+            if (isActiveState(stateText)) {
+              return formatElapsedDuration(Date.now() - startedAt.valueOf());
+            }
+            if (stateText !== 'succeeded' && stateText !== 'failed') return '';
+            const finishedAt = parseTimestamp(status?.finished_at || status?.updated_at);
+            if (!finishedAt) return '';
+            return formatElapsedDuration(finishedAt.valueOf() - startedAt.valueOf());
           }
 
           function escapeHtml(value) {
@@ -2048,6 +2202,55 @@ def render_web_app() -> str:
             return 'Building';
           }
 
+          function absoluteWorkspaceUrl(path, target = 'current') {
+            const value = String(path || '').trim();
+            if (!value) return '';
+            if (/^https?:\/\//i.test(value)) return value;
+            const base =
+              target === 'phone'
+                ? (state.serverInfo?.phone_url || '')
+                : target === 'local'
+                  ? (state.serverInfo?.local_url || state.serverInfo?.localhost_url || '')
+                  : window.location.origin;
+            if (!base) return value;
+            try {
+              return new URL(value, base.endsWith('/') ? base : `${base}/`).toString();
+            } catch (_) {
+              return value;
+            }
+          }
+
+          function studioWorkspaceLinks(workspace = state.workspace) {
+            const previewPath = String(workspace?.preview_url || '').trim();
+            const publishPath = String(workspace?.publish_url || '').trim();
+            return {
+              preview_current: absoluteWorkspaceUrl(previewPath, 'current'),
+              preview_local: absoluteWorkspaceUrl(previewPath, 'local'),
+              preview_phone: absoluteWorkspaceUrl(previewPath, 'phone'),
+              publish_current: absoluteWorkspaceUrl(publishPath, 'current'),
+              publish_local: absoluteWorkspaceUrl(publishPath, 'local'),
+              publish_phone: absoluteWorkspaceUrl(publishPath, 'phone'),
+            };
+          }
+
+          function openStudioWorkspaceLink(kind = 'preview_current') {
+            const url = studioWorkspaceLinks()[kind] || '';
+            if (!url) {
+              window.alert('That workspace link is not available yet.');
+              return;
+            }
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+
+          async function copyStudioWorkspaceLink(kind = 'preview_phone') {
+            const url = studioWorkspaceLinks()[kind] || '';
+            if (!url) {
+              window.alert('That workspace link is not available yet.');
+              return;
+            }
+            await copyText(url);
+          }
+
           function renderWorkspaceSelector(workspaces) {
             const host = document.getElementById('thread-scroll');
             host.classList.add('home-scroll');
@@ -2100,6 +2303,40 @@ def render_web_app() -> str:
             renderWorkspaceSelector(state.workspaces || []);
             loadReview();
             updateControls();
+          }
+
+          async function restoreWorkspaceSelection() {
+            const requested = requestedWorkspaceSelection();
+            const storedWorkspaceId = (() => {
+              try {
+                return (window.localStorage.getItem(WORKSPACE_SELECTION_STORAGE_KEY) || '').trim();
+              } catch (_) {
+                return '';
+              }
+            })();
+            const storedConversationId = (() => {
+              try {
+                return (window.localStorage.getItem(CONVERSATION_SELECTION_STORAGE_KEY) || '').trim();
+              } catch (_) {
+                return '';
+              }
+            })();
+            const workspaceId = requested.workspaceId || storedWorkspaceId || null;
+            const conversationId = requested.conversationId || storedConversationId || null;
+            if (!workspaceId) {
+              renderWorkspaceSelector(state.workspaces || []);
+              return false;
+            }
+            if (!(state.workspaces || []).some((workspace) => workspace.id === workspaceId)) {
+              clearRememberedWorkspaceSelection();
+              renderWorkspaceSelector(state.workspaces || []);
+              return false;
+            }
+            await selectWorkspace(workspaceId, conversationId);
+            if (requested.fromUrl && window.history && window.history.replaceState) {
+              window.history.replaceState({}, '', window.location.pathname);
+            }
+            return true;
           }
 
           function renderHomePane() {
@@ -2160,7 +2397,7 @@ def render_web_app() -> str:
           function renderStatus(status) {
             state.runStatus = status || { state: 'idle', step: 'Idle' };
             const stateText = String(state.runStatus.state || 'idle');
-            setChip('global-run-chip', `run: ${stateText}`, stateText);
+            updateRunChip();
             const active = isActiveState(stateText);
             if (!state.serverInfo) {
               setServerDot('offline', 'Offline');
@@ -2178,6 +2415,32 @@ def render_web_app() -> str:
             }
             updateStudioModeUI();
             updateControls();
+          }
+
+          function updateRunChip() {
+            const status = state.runStatus || { state: 'idle', step: 'Idle' };
+            const stateText = String(status.state || 'idle');
+            const elapsed = currentRunElapsedLabel(status);
+            const queueCount = Number(status.queue_count || 0);
+            let label = elapsed ? `${stateText} (${elapsed})` : stateText;
+            if (queueCount > 0) {
+              label = `${label} +${queueCount} queued`;
+            }
+            setChip('global-run-chip', label, stateText);
+            const chip = document.getElementById('global-run-chip');
+            if (!chip) return;
+            if (elapsed && isActiveState(stateText)) {
+              chip.title = `Running for ${elapsed}${status.started_at ? ` since ${formatStamp(status.started_at)}` : ''}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
+              return;
+            }
+            if (elapsed && (stateText === 'succeeded' || stateText === 'failed')) {
+              const finishedAt = status.finished_at || status.updated_at;
+              chip.title = `Last run ${stateText} after ${elapsed}${finishedAt ? ` at ${formatStamp(finishedAt)}` : ''}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
+              return;
+            }
+            chip.title = status.started_at
+              ? `Last started ${formatStamp(status.started_at)}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`
+              : `Run status: ${stateText}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
           }
 
           function toggleReviewPane() {
@@ -2232,6 +2495,8 @@ def render_web_app() -> str:
             const run = payload.run || {};
             const checks = payload.checks || {};
             const changedFiles = payload.changed_files || [];
+            const queue = payload.queue || {};
+            const queuedItems = queue.items || [];
             const summary = payload.summary || 'No summary yet.';
             const latest = (payload.latest_result && payload.latest_result.content) || '';
             host.innerHTML = `
@@ -2240,7 +2505,16 @@ def render_web_app() -> str:
                 <p class="review-line">State: ${escapeHtml(run.state || 'idle')}</p>
                 <p class="review-line subtle">Step: ${escapeHtml(run.step || 'Idle')}</p>
                 <p class="review-line subtle">Mode: ${escapeHtml(run.mode || 'message')}</p>
+                <p class="review-line subtle">Queued: ${escapeHtml(String(run.queue_count ?? queue.global_count ?? 0))}</p>
                 <p class="review-line subtle">Updated: ${escapeHtml(formatStamp(run.updated_at))}</p>
+              </section>
+              <section class="review-card">
+                <p class="review-title">Queued Messages</p>
+                ${
+                  queuedItems.length
+                    ? `<ul class="review-list">${queuedItems.map((item) => `<li>#${escapeHtml(String(item.position || '?'))}: ${escapeHtml(item.content_preview || '')}</li>`).join('')}</ul>`
+                    : '<p class="review-line subtle">No queued messages for this chat.</p>'
+                }
               </section>
               <section class="review-card">
                 <p class="review-title">Summary</p>
@@ -2275,9 +2549,12 @@ def render_web_app() -> str:
 
           function renderStudioPane() {
             const workspace = state.workspace || {};
+            const links = studioWorkspaceLinks(workspace);
             const previewUrl = workspace.preview_url ? `${workspace.preview_url}${workspace.preview_url.includes('?') ? '&' : '?'}v=${Date.now()}` : '';
             const publishUrl = workspace.publish_url || '';
             const workspaceKind = workspace.workspace_kind || 'studio_game';
+            const previewLink = links.preview_current || '';
+            const phonePreviewLink = links.preview_phone || '';
             return `
               <section class="studio-shell">
                 <section class="studio-preview-card">
@@ -2288,8 +2565,17 @@ def render_web_app() -> str:
                       <div class="studio-pill">${escapeHtml(childFriendlyPreviewState(workspace))}</div>
                       <div class="studio-pill">${escapeHtml(workspace.publish_state === 'published' ? 'Published' : 'Not Published')}</div>
                     </div>
-                    ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
+                    <div class="studio-preview-actions">
+                      ${previewLink ? `<button type="button" onclick="openStudioWorkspaceLink('preview_current')">${escapeHtml(studioPrimaryAction(workspaceKind))} Link</button>` : ''}
+                      ${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Link</button>` : ''}
+                      ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
+                    </div>
                   </div>
+                  ${
+                    previewLink
+                      ? `<div class="studio-preview-link-row"><div class="studio-preview-link-copy"><strong>${escapeHtml(studioPrimaryAction(workspaceKind))} address:</strong> ${escapeHtml(previewLink)}</div>${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Address</button>` : `<button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Address</button>`}</div>`
+                      : ''
+                  }
                   ${
                     previewUrl
                       ? `<iframe class="studio-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(studioArtifactNoun(workspaceKind))} preview"></iframe>`
@@ -2307,12 +2593,16 @@ def render_web_app() -> str:
               return;
             }
             const workspace = state.workspace || {};
+            const links = studioWorkspaceLinks(workspace);
             const lines = [
               `Title: ${workspace.artifact_title || workspace.game_title || workspace.display_name || 'Alcove Studio'}`,
               `Studio: ${studioKindLabel(workspace.workspace_kind)}`,
               `Template: ${workspace.template_kind || 'blank'}`,
               `Preview URL: ${workspace.preview_url || 'Not ready yet'}`,
+              `Local preview address: ${links.preview_local || 'Not ready yet'}`,
+              `Phone preview address: ${links.preview_phone || 'Phone access not available'}`,
               `Publish URL: ${workspace.publish_url || 'Not published yet'}`,
+              `Phone publish address: ${links.publish_phone || 'Not published yet'}`,
               `Repo path: ${workspace.repo_path || 'Managed by Alcove'}`,
             ];
             window.alert(lines.join('\\n'));
@@ -2329,15 +2619,16 @@ def render_web_app() -> str:
               state.conversationId = null;
               state.workspaceId = null;
               state.lastSignature = null;
+              clearRememberedWorkspaceSelection();
               renderWorkspaceSelector(workspaces);
             }
           }
 
-          async function selectWorkspace(workspaceId) {
+          async function selectWorkspace(workspaceId, conversationIdOverride = null) {
             state.workspaceId = workspaceId;
             const workspace = await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
             state.workspace = workspace;
-            state.conversationId = workspace.active_conversation_id || null;
+            state.conversationId = conversationIdOverride || workspace.active_conversation_id || null;
             state.reviewPaneHidden = false;
             closeMobilePanes();
             applyReviewPaneVisibility();
@@ -2348,11 +2639,22 @@ def render_web_app() -> str:
 
           async function loadConversationDetail() {
             if (!state.conversationId || !state.workspaceId) return;
-            const payload = await fetchJson(
-              `/api/conversations/${encodeURIComponent(state.conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`
-            );
+            let payload;
+            try {
+              payload = await fetchJson(
+                `/api/conversations/${encodeURIComponent(state.conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`
+              );
+            } catch (error) {
+              const fallbackConversationId = state.workspace?.active_conversation_id || null;
+              if (fallbackConversationId && fallbackConversationId !== state.conversationId) {
+                state.conversationId = fallbackConversationId;
+                return loadConversationDetail();
+              }
+              throw error;
+            }
             state.workspaceId = payload.workspace_id;
             state.workspace = state.workspaces.find((workspace) => workspace.id === state.workspaceId) || state.workspace;
+            rememberWorkspaceSelection();
             syncAssistantModeUI(payload.assistant_mode || 'ask');
             const signature = JSON.stringify({
               updated_at: payload.updated_at,
@@ -2386,20 +2688,8 @@ def render_web_app() -> str:
             const textarea = document.getElementById('composer');
             if (!textarea) return;
             if (isStudioWorkspace(state.workspace)) {
-              document.getElementById('composer-mode').value = 'message';
-              document.getElementById('assistant-mode').value = 'dev';
-              state.assistantMode = 'dev';
+              syncAssistantModeUI('dev');
               textarea.placeholder = studioPlaceholder(state.workspace?.workspace_kind);
-              const modeMessage = document.getElementById('menu-mode-message');
-              const modeLoop = document.getElementById('menu-mode-loop');
-              if (modeMessage) modeMessage.classList.add('active');
-              if (modeLoop) modeLoop.classList.remove('active');
-              const ask = document.getElementById('menu-assistant-ask');
-              const ops = document.getElementById('menu-assistant-ops');
-              const dev = document.getElementById('menu-assistant-dev');
-              if (ask) ask.classList.remove('active');
-              if (ops) ops.classList.remove('active');
-              if (dev) dev.classList.add('active');
             } else {
               textarea.placeholder = 'Describe what should happen next.';
             }
@@ -2410,11 +2700,7 @@ def render_web_app() -> str:
               window.alert('Loop mode requires dev capability mode.');
               return;
             }
-            document.getElementById('composer-mode').value = mode;
-            const modeMessage = document.getElementById('menu-mode-message');
-            const modeLoop = document.getElementById('menu-mode-loop');
-            if (modeMessage) modeMessage.classList.toggle('active', mode === 'message');
-            if (modeLoop) modeLoop.classList.toggle('active', mode === 'loop');
+            applyComposerMode(mode, true);
             closeActionsMenu();
           }
 
@@ -2428,11 +2714,7 @@ def render_web_app() -> str:
             if (ask) ask.classList.toggle('active', resolved === 'ask');
             if (ops) ops.classList.toggle('active', resolved === 'ops');
             if (dev) dev.classList.toggle('active', resolved === 'dev');
-            if (resolved !== 'dev' && document.getElementById('composer-mode').value === 'loop') {
-              document.getElementById('composer-mode').value = 'message';
-              if (document.getElementById('menu-mode-message')) document.getElementById('menu-mode-message').classList.add('active');
-              if (document.getElementById('menu-mode-loop')) document.getElementById('menu-mode-loop').classList.remove('active');
-            }
+            applyComposerMode(preferredComposerMode());
             updateControls();
           }
 
@@ -2520,6 +2802,12 @@ def render_web_app() -> str:
               payload.reviewer_model || '',
               { allowBlank: true, blankLabel: 'Use default model' }
             );
+            setSelectOptions(
+              'settings-vision-model',
+              modelOptionUnion([]),
+              payload.vision_model || '',
+              { allowBlank: true, blankLabel: 'Use default model' }
+            );
           }
 
           function renderConnectionsPanel() {
@@ -2527,6 +2815,10 @@ def render_web_app() -> str:
             if (!host) return;
             const info = state.serverInfo || {};
             const setupReport = state.setupReport || {};
+            const workspace = state.workspace || {};
+            const workspaceLinks = studioWorkspaceLinks(workspace);
+            const hasProjectPreview = Boolean(workspace.preview_url && workspaceLinks.preview_current);
+            const currentProjectName = workspace.artifact_title || workspace.game_title || workspace.display_name || workspace.id || 'Current project';
             const localUrl = info.local_url || info.localhost_url || 'http://127.0.0.1:8765/';
             const phoneUrl = info.phone_url || '';
             const phoneEnabled = Boolean(info.phone_enabled && phoneUrl);
@@ -2546,6 +2838,25 @@ def render_web_app() -> str:
                       .filter((check) => !check.ok)
                       .map((check) => `${escapeHtml(check.label || check.key)}: ${escapeHtml(check.fix || check.detail || '')}`)
                       .join('<br />')}
+                  </div>
+                </article>
+              ` : ''}
+              ${hasProjectPreview ? `
+                <article class="connection-card">
+                  <div class="connection-title">
+                    <span>Current Project</span>
+                    <span class="connection-state">${escapeHtml(currentProjectName)}</span>
+                  </div>
+                  <p class="connection-copy">Open the active workspace preview directly from this phone, or copy a separate game address to share across devices while you keep working in Alcove.</p>
+                  <p class="connection-url">${escapeHtml(workspaceLinks.preview_current)}</p>
+                  <div class="connection-actions">
+                    <button type="button" onclick="openStudioWorkspaceLink('preview_current')">Open Project</button>
+                    <button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Project Link</button>
+                    <button type="button" onclick="copyStudioWorkspaceLink('preview_phone')" ${workspaceLinks.preview_phone ? '' : 'disabled'}>Copy Phone Game Link</button>
+                  </div>
+                  <div class="connection-meta">
+                    Local preview: ${escapeHtml(workspaceLinks.preview_local || 'Not ready yet')}<br />
+                    Phone preview: ${escapeHtml(workspaceLinks.preview_phone || 'Phone access not available')}
                   </div>
                 </article>
               ` : ''}
@@ -2666,6 +2977,7 @@ def render_web_app() -> str:
               setSelectOptions('settings-planner-model', options, settings.planner_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-builder-model', options, settings.builder_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-reviewer-model', options, settings.reviewer_model || '', { allowBlank: true, blankLabel: 'Use default model' });
+              setSelectOptions('settings-vision-model', options, settings.vision_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               if (status) status.textContent = payload.message || `Found ${models.length} model(s).`;
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not fetch Ollama models.';
@@ -2685,6 +2997,7 @@ def render_web_app() -> str:
                   planner_model: document.getElementById('settings-planner-model').value,
                   builder_model: document.getElementById('settings-builder-model').value,
                   reviewer_model: document.getElementById('settings-reviewer-model').value,
+                  vision_model: document.getElementById('settings-vision-model').value,
                   max_step_retries: Number(document.getElementById('settings-max-step-retries').value || 2),
                   phase_timeout_seconds: Number(document.getElementById('settings-phase-timeout').value || 240),
                 }),
@@ -2741,9 +3054,6 @@ def render_web_app() -> str:
               if (input) input.value = '';
               onComposerFilesChanged();
               state.lastSignature = null;
-              if (mode === 'loop') {
-                await setMode('message');
-              }
               await loadConversationDetail();
               await pollStatus();
               await loadReview();
@@ -3129,7 +3439,6 @@ def render_web_app() -> str:
           }
 
           async function bootstrap() {
-            setMode('message');
             syncAssistantModeUI('ask');
             renderStatus({ state: 'idle', step: 'Loading workspaces' });
             applyStoredPaneLayout();
@@ -3139,8 +3448,11 @@ def render_web_app() -> str:
             await loadSetupStatus();
             await loadServerInfo();
             await loadWorkspaces();
+            const restoredSelection = await restoreWorkspaceSelection();
             await pollStatus();
-            await loadReview();
+            if (!restoredSelection) {
+              await loadReview();
+            }
             updateControls();
             applyMobileDefaults();
             syncKeyboardInset();
@@ -3167,6 +3479,7 @@ def render_web_app() -> str:
               });
             }
             window.setInterval(pollEvents, 1200);
+            window.setInterval(updateRunChip, 1000);
             window.setInterval(pollStatus, 5000);
             window.setInterval(loadServerInfo, 10000);
             window.setInterval(loadSetupStatus, 15000);
@@ -3183,7 +3496,7 @@ def render_web_app() -> str:
         </script>
       </body>
     </html>
-    """
+    """.replace("__LOCKED_VIEWPORT__", _LOCKED_VIEWPORT)
 
 def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_body: str) -> str:
     return f"""
@@ -3191,7 +3504,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="viewport" content="{_LOCKED_VIEWPORT}" />
         <title>Alcove Companion</title>
         <style>
           :root {{
@@ -3426,7 +3739,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             background: transparent;
             color: var(--ink);
             font: inherit;
-            font-size: 14px;
+            font-size: 16px;
             line-height: 1.35;
             outline: none;
             max-width: 100%;

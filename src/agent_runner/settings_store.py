@@ -33,6 +33,7 @@ def load_app_settings(path: Path, defaults: AppSettings) -> AppSettings:
         planner_model=_optional_text(raw.get("planner_model"), defaults.planner_model),
         builder_model=_optional_text(raw.get("builder_model"), defaults.builder_model),
         reviewer_model=_optional_text(raw.get("reviewer_model"), defaults.reviewer_model),
+        vision_model=_optional_text(raw.get("vision_model"), defaults.vision_model),
         codex_bin=str(raw.get("codex_bin", defaults.codex_bin)),
         ollama_host=str(raw.get("ollama_host", defaults.ollama_host)),
         extra_access_dir=extra_access_dir,

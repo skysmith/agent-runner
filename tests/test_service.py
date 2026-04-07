@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 from threading import Event
 import subprocess
+from types import SimpleNamespace
 
 from agent_runner.codex_client import CodexExecResult
-from agent_runner.models import AssistantCapabilityMode, ProviderKind, RunMode
+from agent_runner.models import AssistantCapabilityMode, BuildResult, ProviderKind, ReviewResult, RunMode, RunOutcome, StepRun
 from agent_runner.service import AgentRunnerService, ServiceConfig
 
 
@@ -25,6 +26,16 @@ class FakePhaseClient:
             stderr="",
             return_code=0,
         )
+
+
+class RecordingPhaseClient(FakePhaseClient):
+    def __init__(self, *, message: str = "mobile reply"):
+        super().__init__(message=message)
+        self.requests = []
+
+    def run(self, request) -> CodexExecResult:
+        self.requests.append(request)
+        return super().run(request)
 
 
 class FailingPhaseClient:
@@ -52,33 +63,37 @@ def test_service_send_message_persists_reply(tmp_path: Path) -> None:
     assert not (tmp_path / ".agent-runner" / "active-run.lock").exists()
 
 
-def test_service_blocks_second_active_run(tmp_path: Path) -> None:
+def test_service_queues_second_active_run(tmp_path: Path) -> None:
     gate = Event()
     service = _make_service(tmp_path, phase_client=FakePhaseClient(gate=gate))
     first = service.create_conversation("workspace-1")
     second = service.create_conversation("workspace-2")
 
-    service.send_message(
+    first_response = service.send_message(
         workspace_id="workspace-1",
         conversation_id=str(first["id"]),
         content="First request",
         mode=RunMode.MESSAGE,
     )
+    queued_response = service.send_message(
+        workspace_id="workspace-2",
+        conversation_id=str(second["id"]),
+        content="Second request",
+        mode=RunMode.MESSAGE,
+    )
 
-    try:
-        service.send_message(
-            workspace_id="workspace-2",
-            conversation_id=str(second["id"]),
-            content="Second request",
-            mode=RunMode.MESSAGE,
-        )
-    except RuntimeError as exc:
-        assert "Another workspace is running" in str(exc)
-    else:
-        raise AssertionError("Expected second run to be blocked")
+    assert first_response["queued"] is False
+    assert queued_response["queued"] is True
+    assert queued_response["queue_position"] == 1
+    status = service.get_run_status()
+    assert status["queue_count"] == 1
+    assert status["queued_runs"][0]["conversation_id"] == str(second["id"])
+    assert service.get_conversation(str(second["id"]), workspace_id="workspace-2")["messages"] == []
 
     gate.set()
     _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+    _wait_for(lambda: len(service.get_conversation(str(second["id"]), workspace_id="workspace-2")["messages"]) == 2)
+    assert service.get_run_status()["queue_count"] == 0
 
 
 def test_recover_run_rejects_when_active(tmp_path: Path) -> None:
@@ -163,6 +178,26 @@ def test_service_emits_events_since_cursor(tmp_path: Path) -> None:
     assert isinstance(page2["events"], list)
 
 
+def test_service_event_listener_receives_run_status_payloads(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Listener reply"))
+    conversation = service.create_conversation("workspace-1", title="Listeners")
+    conversation_id = str(conversation["id"])
+    events: list[tuple[str, dict[str, object]]] = []
+    service.add_event_listener(lambda event_type, payload: events.append((event_type, payload)))
+
+    service.send_message(
+        workspace_id="workspace-1",
+        conversation_id=conversation_id,
+        content="Emit listener events",
+        mode=RunMode.MESSAGE,
+    )
+    _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+
+    run_events = [payload for event_type, payload in events if event_type.startswith("run.")]
+    assert run_events
+    assert any((payload.get("status") or {}).get("state") == "succeeded" for payload in run_events)
+
+
 def test_service_loop_requires_dev_assistant_mode(tmp_path: Path) -> None:
     service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Loop blocked"))
     conversation = service.create_conversation("workspace-1")
@@ -223,6 +258,98 @@ def test_send_message_normalizes_page_context_before_persisting(tmp_path: Path) 
     assert context["adapter"] == "inventory"
     assert context["sku"] == "SKU-42"
     assert context["sell_through_window"] == "14d"
+
+
+def test_service_uses_vision_model_for_screenshot_messages_on_ollama(tmp_path: Path) -> None:
+    client = RecordingPhaseClient(message="Visual review ready")
+    service = _make_service(tmp_path, phase_client=client)
+    service.app_settings.provider = ProviderKind.OLLAMA
+    service.app_settings.model = "qwen3:8b"
+    service.app_settings.vision_model = "qwen3-vl:4b"
+    conversation = service.create_conversation("workspace-1")
+    conversation_id = str(conversation["id"])
+    screenshot = tmp_path / "frame.png"
+    screenshot.write_bytes(b"fake-frame")
+
+    service.send_message(
+        workspace_id="workspace-1",
+        conversation_id=conversation_id,
+        content=(
+            "Tell me what looks visually broken.\n\n"
+            "Attached screenshot files (local paths):\n"
+            f"- Screenshot: {screenshot} (image/png, 10 bytes)"
+        ),
+        mode=RunMode.MESSAGE,
+        provider=ProviderKind.OLLAMA,
+        model="qwen3:8b",
+    )
+
+    _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+    assert client.requests
+    assert client.requests[-1].model == "qwen3-vl:4b"
+
+
+def test_service_uses_single_pass_runner_for_dev_message_actions(monkeypatch, tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="should not be used"))
+    service.app_settings.provider = ProviderKind.OLLAMA
+    service.app_settings.model = "qwen3:8b"
+    service.app_settings.planner_model = "qwen3:8b"
+    service.app_settings.builder_model = "gpt-5.3-codex"
+    service.app_settings.reviewer_model = "qwen3:8b"
+    conversation = service.create_conversation("workspace-1")
+    conversation_id = str(conversation["id"])
+    captured: list[object] = []
+
+    class FakeRunner:
+        def __init__(self, config):
+            captured.append(config)
+            self.store = SimpleNamespace(run_dir=tmp_path / ".agent-runner" / "runs" / "fake", build_number=7)
+
+        def run(self):
+            return RunOutcome(
+                ok=True,
+                reason="success",
+                step_runs=[
+                    StepRun(
+                        step_id="step-1",
+                        attempt=1,
+                        build_result=BuildResult(
+                            status="ok",
+                            summary="Applied grounded NPC physics.",
+                            files_touched=["src/game/npc.ts"],
+                            commands_run=["npm test"],
+                            notes=[],
+                        ),
+                        check_results=[],
+                        review_result=ReviewResult(
+                            verdict="pass",
+                            task_complete=True,
+                            step_complete=True,
+                            issues=[],
+                            guidance="",
+                        ),
+                    )
+                ],
+                final_message="Applied grounded NPC physics.",
+            )
+
+    monkeypatch.setattr("agent_runner.service.AgentRunner", FakeRunner)
+
+    service.send_message(
+        workspace_id="workspace-1",
+        conversation_id=conversation_id,
+        content="Please continue and make it so the NPCs don't bounce or float.",
+        mode=RunMode.MESSAGE,
+        assistant_mode=AssistantCapabilityMode.DEV,
+        provider=ProviderKind.OLLAMA,
+        model="qwen3:8b",
+    )
+
+    _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+    assert captured
+    assert captured[-1].max_step_retries == 0
+    record = service.get_conversation(conversation_id, workspace_id="workspace-1")
+    assert "Applied grounded NPC physics." in record["messages"][-1]["content"]
 
 
 def test_define_workspace_persists_display_name_and_repo_path(tmp_path: Path) -> None:

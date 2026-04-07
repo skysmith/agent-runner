@@ -6,6 +6,8 @@ SPEC_FILE="${SCRIPT_DIR}/packaging/agent-runner.spec"
 DIST_DIR="${SCRIPT_DIR}/dist"
 BUILD_DIR="${SCRIPT_DIR}/build/pyinstaller"
 APP_BUNDLE="${DIST_DIR}/Alcove.app"
+DEV_HELPER_APP="${SCRIPT_DIR}/build/macos/Alcove.app/Contents/Resources/AlcoveMenuBar.app"
+DEV_REPO_PATH_FILE="${SCRIPT_DIR}/build/macos/Alcove.app/Contents/Resources/repo-path"
 
 PYTHON_BIN="${AGENT_RUNNER_PYTHON:-$(command -v python3 || true)}"
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
@@ -41,6 +43,15 @@ rm -rf "$APP_BUNDLE" "$BUILD_DIR"
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "Packaged app missing: $APP_BUNDLE" >&2
   exit 1
+fi
+
+if [[ -d "$DEV_HELPER_APP" ]]; then
+  rm -rf "${APP_BUNDLE}/Contents/Resources/AlcoveMenuBar.app"
+  cp -R "$DEV_HELPER_APP" "${APP_BUNDLE}/Contents/Resources/AlcoveMenuBar.app"
+fi
+
+if [[ -f "$DEV_REPO_PATH_FILE" ]]; then
+  cp "$DEV_REPO_PATH_FILE" "${APP_BUNDLE}/Contents/Resources/repo-path"
 fi
 
 touch "$APP_BUNDLE"

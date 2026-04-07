@@ -9,7 +9,7 @@ from .artifacts import ArtifactStore
 from .check_detection import detect_repo_checks
 from .models import ProviderKind, RunOutcome, StepRun
 from .prompt_context import load_mind_map
-from .providers import ProviderRouter, ExecutionRequest, PhaseExecutionClient
+from .providers import ProviderRouter, ExecutionRequest, PhaseExecutionClient, infer_provider_for_model
 from .prompts import (
     builder_prompt,
     builder_schema,
@@ -63,9 +63,9 @@ class AgentRunner:
         if self.config.planner_model or self.config.builder_model or self.config.reviewer_model:
             self._log(
                 "Phase models: "
-                f"planner={self._phase_model('planner')}, "
-                f"builder={self._phase_model('builder')}, "
-                f"reviewer={self._phase_model('reviewer')}"
+                f"planner={self._phase_model('planner')} ({self._phase_provider('planner')}), "
+                f"builder={self._phase_model('builder')} ({self._phase_provider('builder')}), "
+                f"reviewer={self._phase_model('reviewer')} ({self._phase_provider('reviewer')})"
             )
         mind_map_text = load_mind_map(self.config.repo_path)
         if self.config.extra_access_dir:
@@ -91,7 +91,7 @@ class AgentRunner:
         self._log("Phase: planner")
         planner_exec = self.phase_client.run(
             ExecutionRequest(
-                provider=self.config.provider,
+                provider=self._phase_provider("planner"),
                 codex_bin=self.config.codex_bin,
                 model=self._phase_model("planner"),
                 prompt=planner_prompt(
@@ -141,7 +141,7 @@ class AgentRunner:
                 self._log(f"Step {step.id} attempt {attempt}: builder")
                 build_exec = self.phase_client.run(
                     ExecutionRequest(
-                        provider=self.config.provider,
+                        provider=self._phase_provider("builder"),
                         codex_bin=self.config.codex_bin,
                         model=self._phase_model("builder"),
                         prompt=builder_prompt(
@@ -203,7 +203,7 @@ class AgentRunner:
                 self._log(f"Step {step.id} attempt {attempt}: reviewer")
                 reviewer_exec = self.phase_client.run(
                     ExecutionRequest(
-                        provider=self.config.provider,
+                        provider=self._phase_provider("reviewer"),
                         codex_bin=self.config.codex_bin,
                         model=self._phase_model("reviewer"),
                         prompt=reviewer_prompt(
@@ -358,3 +358,6 @@ class AgentRunner:
         if phase == "reviewer" and self.config.reviewer_model:
             return self.config.reviewer_model
         return self.config.model
+
+    def _phase_provider(self, phase: str) -> ProviderKind:
+        return infer_provider_for_model(self._phase_model(phase), self.config.provider)

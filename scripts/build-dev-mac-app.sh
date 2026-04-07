@@ -53,6 +53,20 @@ set -euo pipefail
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_PATH="$(cat "${APP_ROOT}/Resources/repo-path")"
 export AGENT_RUNNER_APP_BUNDLE="${APP_ROOT%/Contents}"
+export AGENT_RUNNER_WRAPPER_EXECUTABLE="${APP_ROOT}/MacOS/Alcove"
+for extra_path in \
+  "$HOME/.npm-global/bin" \
+  "$HOME/.local/bin" \
+  "$HOME/.volta/bin" \
+  "$HOME/.yarn/bin" \
+  "$HOME/.cargo/bin" \
+  "/opt/homebrew/bin" \
+  "/usr/local/bin"; do
+  if [[ -d "$extra_path" && ":${PATH:-}:" != *":$extra_path:"* ]]; then
+    PATH="${PATH:+$PATH:}$extra_path"
+  fi
+done
+export PATH
 WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
 WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
 PASSWORD_FILE="${REPO_PATH}/.agent-runner/web-password"
@@ -60,15 +74,13 @@ WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
 if [[ -z "${WEB_PASSWORD}" && -f "${PASSWORD_FILE}" ]]; then
   WEB_PASSWORD="$(head -n 1 "${PASSWORD_FILE}" | tr -d '\r')"
 fi
-APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
-OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
-URL_FILE="${REPO_PATH}/.agent-runner/web-url"
 
 PYTHON_BIN=""
 for candidate in \
   "${REPO_PATH}/.venv/bin/python" \
   "${REPO_PATH}/.venv/bin/python3" \
-  "$(command -v python3 || true)"; do
+  "$(command -v python3 || true)" \
+  "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"; do
   if [[ -n "${candidate}" && -x "${candidate}" ]]; then
     PYTHON_BIN="${candidate}"
     break
@@ -81,21 +93,21 @@ if [[ -z "${PYTHON_BIN}" ]]; then
 fi
 
 cd "$REPO_PATH"
-LAUNCHER="${REPO_PATH}/alcove.command"
-if [[ ! -x "${LAUNCHER}" ]]; then
-  LAUNCHER="${REPO_PATH}/agent-runner.command"
-fi
-if [[ ! -x "${LAUNCHER}" ]]; then
-  osascript -e 'display alert "Alcove" message "Launcher script is missing or not executable." as critical'
-  exit 1
-fi
+export PYTHONPATH="${REPO_PATH}/src${PYTHONPATH:+:$PYTHONPATH}"
 
 export AGENT_RUNNER_PYTHON="${PYTHON_BIN}"
-export AGENT_RUNNER_URL="${APP_URL}"
+export AGENT_RUNNER_REPO="${REPO_PATH}"
 export AGENT_RUNNER_WEB_HOST="${WEB_HOST}"
 export AGENT_RUNNER_WEB_PORT="${WEB_PORT}"
-export AGENT_RUNNER_WEB_PASSWORD="${WEB_PASSWORD}"
-exec /bin/bash "${LAUNCHER}"
+if [[ -n "${WEB_PASSWORD}" ]]; then
+  export AGENT_RUNNER_WEB_PASSWORD="${WEB_PASSWORD}"
+fi
+
+if [[ "${1:-}" != "--service" && "${1:-}" != "--control" ]]; then
+  "${PYTHON_BIN}" -m agent_runner doctor --repo "${REPO_PATH}" >/dev/null 2>&1 || true
+fi
+
+exec "${PYTHON_BIN}" -m agent_runner.packaged_entry "$@"
 LAUNCHER
 chmod +x "${APP_MACOS}/Alcove"
 
@@ -153,6 +165,54 @@ if ! build_icon; then
   echo "Warning: failed to build emoji icon; continuing with default app icon." >&2
 fi
 rm -rf "$TMP_DIR"
+
+HELPER_SRC="${SCRIPT_DIR}/packaging/macos/AlcoveMenuBar.swift"
+HELPER_APP="${APP_RESOURCES}/AlcoveMenuBar.app"
+HELPER_CONTENTS="${HELPER_APP}/Contents"
+HELPER_MACOS="${HELPER_CONTENTS}/MacOS"
+HELPER_RESOURCES="${HELPER_CONTENTS}/Resources"
+
+if [[ -f "$HELPER_SRC" ]] && command -v swiftc >/dev/null 2>&1; then
+  rm -rf "$HELPER_APP"
+  mkdir -p "$HELPER_MACOS" "$HELPER_RESOURCES"
+  cat > "${HELPER_CONTENTS}/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>English</string>
+  <key>CFBundleDisplayName</key>
+  <string>Alcove Menu Bar</string>
+  <key>CFBundleExecutable</key>
+  <string>AlcoveMenuBar</string>
+  <key>CFBundleIdentifier</key>
+  <string>local.alcove.menubar</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>AlcoveMenuBar</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+  swiftc -O -framework AppKit "$HELPER_SRC" -o "${HELPER_MACOS}/AlcoveMenuBar"
+  chmod +x "${HELPER_MACOS}/AlcoveMenuBar"
+  if [[ -f "$ICON_FILE" ]]; then
+    cp "$ICON_FILE" "${HELPER_RESOURCES}/Alcove.icns"
+  fi
+else
+  echo "Warning: could not build Alcove menu bar helper; swiftc or source file is missing." >&2
+fi
 
 touch "$APP_BUNDLE"
 echo "Built dev mac app: $APP_BUNDLE"

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from .executable_utils import resolve_executable_path
 
 
 @dataclass(slots=True)
@@ -109,7 +110,7 @@ def _check_repo_path(repo_path: Path | None) -> DoctorCheck:
 
 
 def _check_codex_installed(codex_bin: str) -> DoctorCheck:
-    resolved = shutil.which(codex_bin) if "/" not in codex_bin else codex_bin
+    resolved = resolve_executable_path(codex_bin)
     ok = bool(resolved)
     detail = f"Found `{codex_bin}` at `{resolved}`." if resolved else f"`{codex_bin}` was not found on PATH."
     fix = None if ok else "Install Codex CLI and make sure the `codex` command works in your shell."
@@ -123,9 +124,10 @@ def _check_codex_installed(codex_bin: str) -> DoctorCheck:
 
 
 def _check_codex_login(codex_bin: str) -> DoctorCheck:
+    resolved = resolve_executable_path(codex_bin) or codex_bin
     try:
         proc = subprocess.run(
-            [codex_bin, "login", "status"],
+            [resolved, "login", "status"],
             text=True,
             capture_output=True,
             check=False,

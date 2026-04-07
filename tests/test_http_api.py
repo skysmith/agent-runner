@@ -108,6 +108,31 @@ def test_root_route_renders_desktop_web_app(tmp_path: Path) -> None:
         assert "menu-button" in response
         assert "/api/conversations" in response
         assert "build-badge" in response
+        assert "function updateRunChip" in response
+        assert "window.setInterval(updateRunChip, 1000);" in response
+        assert "function studioWorkspaceLinks" in response
+        assert "function copyStudioWorkspaceLink" in response
+        assert "Current Project" in response
+        assert "Copy Phone Game Link" in response
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_root_route_preserves_run_mode_preferences_in_web_ui(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    service.create_conversation("workspace-1", title="Studio thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        response = urllib.request.urlopen(base).read().decode("utf-8")
+        assert "alcove-composer-mode-preferences" in response
+        assert "function applyComposerMode" in response
+        assert "syncAssistantModeUI('dev');" in response
+        assert "await setMode('message');" not in response
+        assert "document.getElementById('composer-mode').value = 'message';" not in response
     finally:
         server.shutdown()
         server.server_close()
@@ -359,6 +384,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
                 "planner_model": "qwen2.5:7b",
                 "builder_model": "qwen2.5-coder:7b",
                 "reviewer_model": "llama3.1:8b",
+                "vision_model": "qwen3-vl:4b",
                 "max_step_retries": 3,
                 "phase_timeout_seconds": 180,
             },
@@ -366,6 +392,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         assert updated["provider"] == "ollama"
         assert updated["model"] == "llama3.1:8b"
         assert updated["planner_model"] == "qwen2.5:7b"
+        assert updated["vision_model"] == "qwen3-vl:4b"
         models = _get_json(f"{base}/api/providers/ollama/models")
         assert "available" in models and "models" in models and "message" in models
     finally:
@@ -464,6 +491,45 @@ def test_recover_endpoint_rejects_when_run_active(tmp_path: Path) -> None:
             raise AssertionError("Expected recover endpoint to return 409 while active")
     finally:
         gate.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_message_endpoint_queues_requests_while_busy(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    gate = Event()
+    service = _make_service(tmp_path, phase_client=GatePhaseClient(gate))
+    first = service.create_conversation("workspace-1", title="First thread")
+    second = service.create_conversation("workspace-2", title="Second thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        started = _post_json(
+            f"{base}/api/conversations/{first['id']}/messages",
+            {"content": "Keep running", "mode": "message", "workspace_id": "workspace-1"},
+        )
+        queued = _post_json(
+            f"{base}/api/conversations/{second['id']}/messages",
+            {"content": "Queue this next", "mode": "message", "workspace_id": "workspace-2"},
+        )
+
+        assert started["queued"] is False
+        assert queued["queued"] is True
+        assert queued["queue_position"] == 1
+        status = _get_json(f"{base}/api/run-status")
+        assert status["queue_count"] == 1
+        assert status["queued_runs"][0]["conversation_id"] == str(second["id"])
+
+        gate.set()
+        _wait_for(
+            lambda: len(
+                _get_json(f"{base}/api/conversations/{second['id']}?workspace_id=workspace-2")["messages"]
+            )
+            == 2
+        )
+        assert _get_json(f"{base}/api/run-status")["queue_count"] == 0
+    finally:
         server.shutdown()
         server.server_close()
 
