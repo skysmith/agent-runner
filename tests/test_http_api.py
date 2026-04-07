@@ -108,6 +108,31 @@ def test_root_route_renders_desktop_web_app(tmp_path: Path) -> None:
         assert "menu-button" in response
         assert "/api/conversations" in response
         assert "build-badge" in response
+        assert "function updateRunChip" in response
+        assert "window.setInterval(updateRunChip, 1000);" in response
+        assert "function studioWorkspaceLinks" in response
+        assert "function copyStudioWorkspaceLink" in response
+        assert "Current Project" in response
+        assert "Copy Phone Game Link" in response
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_root_route_preserves_run_mode_preferences_in_web_ui(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    service.create_conversation("workspace-1", title="Studio thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        response = urllib.request.urlopen(base).read().decode("utf-8")
+        assert "alcove-composer-mode-preferences" in response
+        assert "function applyComposerMode" in response
+        assert "syncAssistantModeUI('dev');" in response
+        assert "await setMode('message');" not in response
+        assert "document.getElementById('composer-mode').value = 'message';" not in response
     finally:
         server.shutdown()
         server.server_close()
@@ -139,6 +164,87 @@ def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> N
         )
         assert isinstance(active["repositories"], list)
         assert any(item["repo_path"] == str(repo) for item in active["repositories"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_import_endpoint_accepts_repo_path_and_auto_detects_studio(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "northstar-site"
+    dist = repo / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Northstar</title>", encoding="utf-8")
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(
+            f"{base}/api/workspaces/import-folder",
+            {
+                "repo_path": str(repo),
+            },
+        )
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["workspace_kind"] == "studio_web"
+        assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/dist/index.html"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_import_endpoint_can_use_native_picker(monkeypatch, tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "picked-repo"
+    _init_git_repo(repo)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(service, "pick_local_folder_path", lambda: str(repo))
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(f"{base}/api/workspaces/import-folder", {})
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["display_name"] == "picked-repo"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_import_endpoint_uses_studio_manifest_for_existing_project(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    repo = tmp_path / "landmines"
+    repo.mkdir(parents=True)
+    (repo / "index.html").write_text("<!doctype html><title>Landmines</title>", encoding="utf-8")
+    (repo / "alcove-studio.json").write_text(
+        json.dumps(
+            {
+                "workspace_id": "landmines",
+                "workspace_kind": "studio_game",
+                "artifact_title": "landmines",
+                "template_kind": "platformer",
+                "preview_mode": "managed-static",
+                "entry_file": "game.js",
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        workspace = _post_json(
+            f"{base}/api/workspaces/import-folder",
+            {
+                "repo_path": str(repo),
+            },
+        )
+        assert workspace["repo_path"] == str(repo)
+        assert workspace["workspace_kind"] == "studio_game"
+        assert workspace["template_kind"] == "platformer"
+        assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/index.html"
     finally:
         server.shutdown()
         server.server_close()
@@ -269,6 +375,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         base = f"http://127.0.0.1:{server.server_port}"
         settings = _get_json(f"{base}/api/settings")
         assert settings["provider"] in {"codex", "ollama"}
+        assert settings["codex_bin"] == "codex"
         updated = _patch_json(
             f"{base}/api/settings",
             {
@@ -277,6 +384,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
                 "planner_model": "qwen2.5:7b",
                 "builder_model": "qwen2.5-coder:7b",
                 "reviewer_model": "llama3.1:8b",
+                "vision_model": "qwen3-vl:4b",
                 "max_step_retries": 3,
                 "phase_timeout_seconds": 180,
             },
@@ -284,8 +392,46 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         assert updated["provider"] == "ollama"
         assert updated["model"] == "llama3.1:8b"
         assert updated["planner_model"] == "qwen2.5:7b"
+        assert updated["vision_model"] == "qwen3-vl:4b"
         models = _get_json(f"{base}/api/providers/ollama/models")
         assert "available" in models and "models" in models and "message" in models
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_setup_check_endpoint_reports_doctor_status(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(
+        "agent_runner.service.run_doctor",
+        lambda **kwargs: type(
+            "Report",
+            (),
+            {
+                "to_dict": lambda self: {
+                    "ok": False,
+                    "checks": [
+                        {
+                            "key": "codex_login",
+                            "label": "Codex authentication",
+                            "ok": False,
+                            "detail": "Not logged in.",
+                            "fix": "Run `codex login`.",
+                        }
+                    ],
+                    "summary": "Setup is incomplete.",
+                }
+            },
+        )(),
+    )
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = _get_json(f"{base}/api/setup-check")
+        assert payload["ok"] is False
+        assert payload["checks"][0]["key"] == "codex_login"
     finally:
         server.shutdown()
         server.server_close()
@@ -345,6 +491,45 @@ def test_recover_endpoint_rejects_when_run_active(tmp_path: Path) -> None:
             raise AssertionError("Expected recover endpoint to return 409 while active")
     finally:
         gate.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_message_endpoint_queues_requests_while_busy(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    gate = Event()
+    service = _make_service(tmp_path, phase_client=GatePhaseClient(gate))
+    first = service.create_conversation("workspace-1", title="First thread")
+    second = service.create_conversation("workspace-2", title="Second thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        started = _post_json(
+            f"{base}/api/conversations/{first['id']}/messages",
+            {"content": "Keep running", "mode": "message", "workspace_id": "workspace-1"},
+        )
+        queued = _post_json(
+            f"{base}/api/conversations/{second['id']}/messages",
+            {"content": "Queue this next", "mode": "message", "workspace_id": "workspace-2"},
+        )
+
+        assert started["queued"] is False
+        assert queued["queued"] is True
+        assert queued["queue_position"] == 1
+        status = _get_json(f"{base}/api/run-status")
+        assert status["queue_count"] == 1
+        assert status["queued_runs"][0]["conversation_id"] == str(second["id"])
+
+        gate.set()
+        _wait_for(
+            lambda: len(
+                _get_json(f"{base}/api/conversations/{second['id']}?workspace_id=workspace-2")["messages"]
+            )
+            == 2
+        )
+        assert _get_json(f"{base}/api/run-status")["queue_count"] == 0
+    finally:
         server.shutdown()
         server.server_close()
 

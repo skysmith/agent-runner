@@ -3,15 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESKTOP_DIR="${HOME}/Desktop"
+APPLICATIONS_DIR="${HOME}/Applications"
 APP_NAME="Alcove"
-APP_BUNDLE="${DESKTOP_DIR}/${APP_NAME}.app"
-LEGACY_APP_BUNDLE="${DESKTOP_DIR}/agent-runner.app"
 SOURCE_APP="${SCRIPT_DIR}/build/macos/${APP_NAME}.app"
 
-if [[ ! -d "$DESKTOP_DIR" ]]; then
-  echo "Desktop directory not found: $DESKTOP_DIR" >&2
-  exit 1
-fi
+mkdir -p "$APPLICATIONS_DIR"
 
 if [[ ! -x "${SCRIPT_DIR}/scripts/build-dev-mac-app.sh" ]]; then
   echo "Build script missing or not executable: ${SCRIPT_DIR}/scripts/build-dev-mac-app.sh" >&2
@@ -25,10 +21,20 @@ if [[ ! -d "$SOURCE_APP" ]]; then
   exit 1
 fi
 
-rm -rf "$APP_BUNDLE"
-rm -rf "$LEGACY_APP_BUNDLE"
-cp -R "$SOURCE_APP" "$APP_BUNDLE"
-touch "$APP_BUNDLE"
-echo "Created desktop launcher: $APP_BUNDLE"
-echo "Removed legacy launcher: $LEGACY_APP_BUNDLE"
+TARGET_DIRS=("$APPLICATIONS_DIR")
+if [[ -d "$DESKTOP_DIR" ]]; then
+  TARGET_DIRS+=("$DESKTOP_DIR")
+fi
+
+for target_dir in "${TARGET_DIRS[@]}"; do
+  app_bundle="${target_dir}/${APP_NAME}.app"
+  legacy_app_bundle="${target_dir}/agent-runner.app"
+  rm -rf "$app_bundle"
+  rm -rf "$legacy_app_bundle"
+  cp -R "$SOURCE_APP" "$app_bundle"
+  touch "$app_bundle"
+  echo "Installed launcher: $app_bundle"
+  echo "Removed legacy launcher: $legacy_app_bundle"
+done
+
 echo "Source app: $SOURCE_APP"

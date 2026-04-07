@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
+
+from .executable_utils import resolve_executable_path
 
 
 @dataclass(slots=True)
@@ -96,13 +97,13 @@ def run_codex_json(
 
 
 def _resolve_codex_command(codex_bin: str) -> list[str]:
-    candidate = shutil.which(codex_bin) if os.sep not in codex_bin else codex_bin
+    candidate = resolve_executable_path(codex_bin) or codex_bin
     discovered = Path(candidate or codex_bin).expanduser()
     if not discovered.exists():
         return [codex_bin]
     resolved = discovered.resolve()
     if resolved.suffix == ".js":
-        node_bin = shutil.which("node")
+        node_bin = resolve_executable_path("node")
         if node_bin:
             if os.uname().sysname == "Darwin" and os.uname().machine == "arm64":
                 arch_bin = Path("/usr/bin/arch")

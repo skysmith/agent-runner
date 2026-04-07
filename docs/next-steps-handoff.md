@@ -19,6 +19,7 @@ Deliver the next UX/stability slice:
 2. add one end-to-end browser flow test for desktop and mobile
 3. smooth refresh behavior with persisted event cursor/session hints
 4. complete Tk handoff to thin launcher (`web` runtime only)
+5. make the macOS wrapper materially useful with native desktop integrations
 
 ---
 
@@ -171,7 +172,7 @@ Eliminate split lifecycle logic. Tk should only launch/open the web runtime.
 ### Implementation Notes
 
 1. Define single startup path:
-   - start `agent-runner web` with chosen host/port.
+   - start `agent-runner web` with the standard local port `8765`.
    - open browser URL.
 2. Keep Tk shell (if retained) informational only:
    - show URL/status
@@ -186,17 +187,99 @@ Eliminate split lifecycle logic. Tk should only launch/open the web runtime.
 
 ---
 
+## Step 5: Native macOS Wrapper Priority Build
+
+### Goal
+
+Turn the macOS wrapper from a one-click launcher into a genuinely helpful local desktop shell around the browser-first runtime.
+
+### Scope
+
+Priority items for the next wrapper-focused build:
+
+- Notification Center alerts for run completion, failure, and follow-up-required states
+- menu bar status item with quick actions
+- Finder Quick Action to open a folder in Alcove
+- power management assertion while a run is active
+
+Follow-on hardening item:
+
+- store local wrapper credentials in Keychain instead of plaintext files when auth is enabled
+
+Explicitly deferred from this build:
+
+- share extension
+
+### Files (likely)
+
+- `scripts/build-dev-mac-app.sh`
+- `scripts/build-packaged-mac-app.sh`
+- `src/agent_runner/packaged_entry.py`
+- `src/agent_runner/service.py`
+- wrapper-specific support module(s) under `src/agent_runner/`
+- packaging metadata under `packaging/`
+
+### Implementation Notes
+
+1. Notification Center:
+   - emit native notifications when a run changes into:
+     - `succeeded`
+     - `failed`
+     - a state that needs explicit user follow-up
+   - notification body should include workspace name and short run outcome.
+2. Menu bar:
+   - add a lightweight status item that shows:
+     - current run state
+     - open Alcove
+     - open current workspace
+     - stop run
+     - copy local URL
+     - copy phone URL when available
+     - restart wrapper/server
+3. Finder Quick Action:
+   - support “Open in Alcove” for folders
+   - pass the selected folder path into Alcove and either:
+     - switch to matching workspace, or
+     - create/import a workspace for that repo
+4. Power management assertion:
+   - acquire assertion when a run enters active execution
+   - release it on success, failure, stop, or crash recovery
+   - keep scope narrow so idle Alcove does not prevent sleep
+5. Keychain:
+   - if wrapper auth/password persists locally, prefer Keychain for user secrets
+   - keep existing file-based password as a temporary fallback only while migrating
+
+### Acceptance Criteria
+
+- Run completion/failure can surface as native macOS notifications.
+- A menu bar item exists and exposes the most common wrapper actions without opening the full window first.
+- From Finder, a user can send a folder into Alcove without manual copy/paste.
+- The machine does not go to sleep mid-run under normal lid-open desktop usage.
+- Wrapper-native features do not create a second source of truth; the HTTP service remains canonical.
+
+### Verification
+
+- Launch packaged wrapper and confirm notifications appear for dry-run success and simulated failure.
+- Confirm menu bar item updates state as the run moves from `idle` to active states and back.
+- Trigger Finder Quick Action on a test repo and confirm Alcove opens that workspace.
+- Start a long-running dry-run stub and confirm power assertion is present only while the run is active.
+- If Keychain integration lands in the same slice, confirm credentials survive restart without plaintext-only dependence.
+
+---
+
 ## Recommended Execution Order
 
 1. Step 1 (toast/loading UX)  
 2. Step 3 (cursor/session persistence)  
 3. Step 2 (capture with E2E flow test)  
 4. Step 4 (Tk handoff, protected by E2E + existing API tests)
+5. Step 5 (native macOS wrapper priority build)
 
 Rationale:
 - Step 1 and Step 3 stabilize UX mechanics first.
 - Step 2 locks behavior before launcher migration.
 - Step 4 is highest blast radius; do it last with tests in place.
+- Step 5 should start immediately after thin-launcher unification so native wrapper features sit on top of one stable runtime path.
 
 ---
 
@@ -205,6 +288,8 @@ Rationale:
 - Event cursor persistence must handle invalid or stale cursor values safely.
 - Avoid introducing client-side state as source of truth; server status remains canonical.
 - Tk handoff can break packaging if launcher assumptions differ across local vs bundled mode.
+- Wrapper-native features must not fork lifecycle behavior away from the shared HTTP service.
+- Notification delivery and power assertions must fail safe; missing native capability should degrade gracefully, not block runs.
 
 ---
 
@@ -214,3 +299,4 @@ Rationale:
 - Browser E2E flow validates desktop + mobile critical path.
 - Event cursor and conversation selection survive reloads cleanly.
 - Tk launcher path is reduced to thin wrapper semantics around `agent-runner web`.
+- Next wrapper-focused build is explicitly scoped around notifications, menu bar, Finder Quick Action, and power assertion support.

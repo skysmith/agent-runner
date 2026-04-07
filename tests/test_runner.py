@@ -358,6 +358,52 @@ def test_runner_passes_selected_provider(monkeypatch, tmp_path: Path) -> None:
     assert seen_provider == [ProviderKind.OLLAMA, ProviderKind.OLLAMA, ProviderKind.OLLAMA]
 
 
+def test_runner_infers_phase_provider_from_model_name(monkeypatch, tmp_path: Path) -> None:
+    task_file = _task_file(tmp_path)
+    seen_provider: list[ProviderKind] = []
+    seen_model: list[str] = []
+    responses: list[dict[str, Any]] = [
+        {
+            "assumptions": [],
+            "steps": [
+                {
+                    "id": "s1",
+                    "title": "Do it",
+                    "instructions": "Make the change",
+                    "done_criteria": ["done"],
+                    "dependencies": [],
+                }
+            ],
+        },
+        {"status": "ok", "summary": "implemented", "files_touched": [], "commands_run": [], "notes": []},
+        {"verdict": "pass", "task_complete": True, "step_complete": True, "issues": [], "guidance": ""},
+    ]
+
+    def fake_run(self, request):
+        seen_provider.append(request.provider)
+        seen_model.append(request.model)
+        payload = responses.pop(0)
+        return CodexExecResult(payload=payload, raw_jsonl='{"final_output":{}}', stderr="", return_code=0)
+
+    monkeypatch.setattr("agent_runner.providers.ProviderRouter.run", fake_run)
+    monkeypatch.setattr("agent_runner.runner.run_checks", lambda commands, repo_path: [])
+
+    config = RunnerConfig(
+        task_file=task_file,
+        repo_path=tmp_path,
+        artifacts_dir=tmp_path / ".agent-runner",
+        provider=ProviderKind.OLLAMA,
+        model="qwen3:8b",
+        planner_model="qwen3:8b",
+        builder_model="gpt-5.3-codex",
+        reviewer_model="qwen3:8b",
+    )
+    outcome = AgentRunner(config).run()
+    assert outcome.ok is True
+    assert seen_model == ["qwen3:8b", "gpt-5.3-codex", "qwen3:8b"]
+    assert seen_provider == [ProviderKind.OLLAMA, ProviderKind.CODEX, ProviderKind.OLLAMA]
+
+
 def test_runner_can_stop_safely_before_execution(monkeypatch, tmp_path: Path) -> None:
     task_file = _task_file(tmp_path)
     responses: list[dict[str, Any]] = [

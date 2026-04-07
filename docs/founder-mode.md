@@ -44,5 +44,5 @@ That command will:
 ## Notes
 
 - If you want a custom password for the session, export `AGENT_RUNNER_WEB_PASSWORD` before starting.
-- If you want a different port, export `AGENT_RUNNER_WEB_PORT` before starting.
+- Keep the local runtime on port `8765`; founder-mode docs and local build flows assume that standard port.
 - `.agent-runner/` is gitignored, so local host details stay out of version control.

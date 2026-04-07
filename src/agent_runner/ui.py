@@ -1276,16 +1276,16 @@ class ImageGenPane:
     def launch_dashboard(self) -> None:
         ai_art_dir = self.app.ai_art_dir
         if ai_art_dir is None:
-            messagebox.showerror("agent-runner", "ai-art directory not found.")
+            messagebox.showerror("Alcove", "ai-art directory not found.")
             return
         launcher = ai_art_dir / "launch_dashboard.sh"
         if not launcher.exists():
-            messagebox.showerror("agent-runner", f"Missing launcher: {launcher}")
+            messagebox.showerror("Alcove", f"Missing launcher: {launcher}")
             return
         try:
             subprocess.Popen(["/bin/bash", str(launcher)], cwd=str(ai_art_dir))
         except Exception as exc:  # pragma: no cover - GUI fallback
-            messagebox.showerror("agent-runner", f"Failed to launch dashboard: {exc}")
+            messagebox.showerror("Alcove", f"Failed to launch dashboard: {exc}")
             return
         self.status_var.set("Launch requested. Refreshing status...")
         self.frame.after(1200, self.refresh_status)
@@ -1296,7 +1296,7 @@ class ImageGenPane:
             self.refresh_status()
             url = self.url_var.get().strip()
         if not url:
-            messagebox.showerror("agent-runner", "No dashboard URL found yet.")
+            messagebox.showerror("Alcove", "No dashboard URL found yet.")
             return
         webbrowser.open(url)
 
@@ -1310,7 +1310,7 @@ class WindowController:
         self.root = root
         self.tab_by_id: dict[str, WorkspacePane | ImageGenPane] = {}
 
-        self.root.title("agent-runner")
+        self.root.title("Alcove")
         self.root.configure(bg="#f5f5f3")
         self.root.geometry("720x760")
         self.root.minsize(680, 620)
@@ -1327,7 +1327,7 @@ class WindowController:
 
         if is_macos:
             app_menu = Menu(menubar, name="apple", tearoff=0)
-            app_menu.add_command(label="About agent-runner", command=self.app.show_about_dialog)
+            app_menu.add_command(label="About Alcove", command=self.app.show_about_dialog)
             app_menu.add_command(label="Open Companion UI", command=lambda: self.app.open_companion_ui(parent=self.root))
             app_menu.add_separator()
             app_menu.add_command(label="Safe Reload", command=lambda: self.app.trigger_safe_reload(parent=self.root))
@@ -1362,14 +1362,14 @@ class WindowController:
         menubar.add_cascade(label="Settings", menu=settings_menu)
 
         help_menu = Menu(menubar, tearoff=0)
-        help_menu.add_command(label="About agent-runner", command=self.app.show_about_dialog)
+        help_menu.add_command(label="About Alcove", command=self.app.show_about_dialog)
         menubar.add_cascade(label="Help", menu=help_menu)
 
         self.root.configure(menu=menubar)
         self.root.createcommand("tkAboutDialog", self.app.show_about_dialog)
 
     def _tab_changed(self, _: object) -> None:
-        self.root.title("agent-runner")
+        self.root.title("Alcove")
 
     def _refresh_tab_bar_visibility(self) -> None:
         tab_count = len(self.notebook.tabs())
@@ -1411,7 +1411,7 @@ class WindowController:
             return
         pane = self.tab_by_id.get(tab_id)
         if isinstance(pane, WorkspacePane) and pane.is_running:
-            messagebox.showerror("agent-runner", "This workspace is currently running.")
+            messagebox.showerror("Alcove", "This workspace is currently running.")
             return
         self.tab_by_id.pop(tab_id, None)
         self.notebook.forget(tab_id)
@@ -1422,7 +1422,7 @@ class WindowController:
     def close_window(self) -> None:
         for pane in self.tab_by_id.values():
             if isinstance(pane, WorkspacePane) and pane.is_running:
-                messagebox.showerror("agent-runner", "A workspace in this window is currently running.")
+                messagebox.showerror("Alcove", "A workspace in this window is currently running.")
                 return
         self.app.close_window(self)
 
@@ -1431,7 +1431,7 @@ class WindowController:
         if pane is None:
             return
         if pane.is_running:
-            messagebox.showerror("agent-runner", "Cannot change workspace settings while running.")
+            messagebox.showerror("Alcove", "Cannot change workspace settings while running.")
             return
         self.app.open_workspace_settings_modal(self.root, pane)
 
@@ -1441,10 +1441,10 @@ class WindowController:
         if pane is None:
             return
         if not isinstance(pane, WorkspacePane):
-            messagebox.showerror("agent-runner", "Only task tabs can be moved to a new window.")
+            messagebox.showerror("Alcove", "Only task tabs can be moved to a new window.")
             return
         if pane.is_running:
-            messagebox.showerror("agent-runner", "Cannot move a running workspace.")
+            messagebox.showerror("Alcove", "Cannot move a running workspace.")
             return
         prompt_text = pane.prompt_snapshot()
         override = WorkspaceSettings(
@@ -1705,8 +1705,8 @@ class WorkspaceApp:
     def show_about_dialog(self) -> None:
         build_label = read_build_label(self.bootstrap.repo_path) or "Build unavailable"
         messagebox.showinfo(
-            "About agent-runner",
-            f"agent-runner\n\n{build_label}",
+            "About Alcove",
+            f"Alcove\n\n{build_label}",
             parent=self.root,
         )
 
@@ -1724,13 +1724,13 @@ class WorkspaceApp:
         try:
             from .http_api import create_server
         except Exception as exc:
-            messagebox.showerror("agent-runner", f"Could not load companion server: {exc}", parent=parent)
+            messagebox.showerror("Alcove", f"Could not load companion server: {exc}", parent=parent)
             return
 
         try:
             self.companion_server = create_server(self.service, self.companion_host, self.companion_port)
         except OSError as exc:
-            messagebox.showerror("agent-runner", f"Could not start companion server: {exc}", parent=parent)
+            messagebox.showerror("Alcove", f"Could not start companion server: {exc}", parent=parent)
             return
         self.companion_server_thread = threading.Thread(target=self.companion_server.serve_forever, daemon=True)
         self.companion_server_thread.start()
@@ -1742,7 +1742,7 @@ class WorkspaceApp:
             time.sleep(0.05)
         if not self._companion_is_running():
             messagebox.showwarning(
-                "agent-runner",
+                "Alcove",
                 f"Companion server is still starting on {self._companion_display_host()}:{self.companion_port}.",
                 parent=parent,
             )
@@ -1780,7 +1780,7 @@ class WorkspaceApp:
         url = self._companion_tailscale_url()
         if not url:
             messagebox.showerror(
-                "agent-runner",
+                "Alcove",
                 "No Tailscale hostname was found on this machine.",
                 parent=parent,
             )
@@ -1944,7 +1944,9 @@ class WorkspaceApp:
             if bundle_path:
                 subprocess.Popen(["open", "-na", bundle_path], cwd=str(self.bootstrap.repo_path))
             else:
-                launcher = self.bootstrap.repo_path / "agent-runner.command"
+                launcher = self.bootstrap.repo_path / "alcove.command"
+                if not launcher.exists():
+                    launcher = self.bootstrap.repo_path / "agent-runner.command"
                 if launcher.exists():
                     subprocess.Popen(["/bin/bash", str(launcher)], cwd=str(self.bootstrap.repo_path))
                 else:
@@ -1956,7 +1958,7 @@ class WorkspaceApp:
             if callable(shutdown):
                 self.root.after(50, shutdown)
         except Exception as exc:  # pragma: no cover - UI fallback
-            messagebox.showerror("agent-runner", f"Could not reload app: {exc}", parent=parent)
+            messagebox.showerror("Alcove", f"Could not reload app: {exc}", parent=parent)
 
     def _refresh_ollama(self) -> None:
         probe = probe_ollama(self.app_settings.ollama_host)
@@ -2059,7 +2061,7 @@ class WorkspaceApp:
 
         ttk.Label(
             form,
-            text="When checks policy is auto, agent-runner uses task checks first and falls back to repo detection.",
+            text="When checks policy is auto, Alcove uses task checks first and falls back to repo detection.",
             style="Muted.TLabel",
             wraplength=360,
         ).grid(row=12, column=1, sticky="w", pady=(2, 8))
@@ -2197,7 +2199,7 @@ class WorkspaceApp:
 def launch_ui(settings: UiSettings) -> int:
     root = Tk()
     try:
-        root.tk.call("tk", "appname", "agent-runner")
+        root.tk.call("tk", "appname", "Alcove")
     except Exception:
         pass
     WorkspaceApp(root=root, bootstrap=settings)

@@ -2,6 +2,51 @@
 
 Calm, repo-scoped control for Codex, built around visible artifacts.
 
+## Open Source Status
+
+Alcove is still early, but this repo is intended to be usable in public:
+
+- the browser-first runtime is the primary path
+- the macOS launcher and packaged app are convenience layers on top
+- tests should be green before release cuts
+- internal roadmap docs are kept in-repo for product context, not as polished public docs
+
+If you are landing here for the first time, start with the dev quickstart below.
+
+## Quickstart
+
+Prerequisites:
+
+- Python 3.11+
+- Codex CLI installed (`codex --version`)
+- Codex authenticated (`codex login status` should show ChatGPT login)
+
+Setup:
+
+```bash
+./scripts/setup-dev.sh
+```
+
+Launch the browser-first runtime:
+
+```bash
+alcove web
+```
+
+Run the test suite:
+
+```bash
+pytest -q
+```
+
+Check whether a machine is ready before launching:
+
+```bash
+alcove doctor
+```
+
+During the transition, the older `agent-runner` command name and `./agent-runner.command` launcher still work as compatibility aliases.
+
 Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
 
 It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
@@ -92,19 +137,19 @@ The older finance-specific roadmap in `docs/alcove.rtf` still matters, but it sh
 Browser-first runtime:
 
 ```bash
-agent-runner web
+alcove web
 ```
 
-Legacy alias (same HTTP runtime, network-first bind default):
+Network-first alias (same HTTP runtime, `0.0.0.0` bind default):
 
 ```bash
-agent-runner serve
+alcove serve
 ```
 
 Desktop launcher:
 
 ```bash
-agent-runner ui
+alcove ui
 ```
 
 `ui` acts as a thin launcher for the browser-first runtime and opens your browser.
@@ -112,16 +157,16 @@ agent-runner ui
 Direct CLI run:
 
 ```bash
-agent-runner run task.md --check "pytest -q"
+alcove run task.md --check "pytest -q"
 ```
 
 Inline task mode:
 
 ```bash
-agent-runner run --task "check this repo for docs and summarize the architecture"
+alcove run --task "check this repo for docs and summarize the architecture"
 ```
 
-By default, `agent-runner run` targets the current directory. Use `--repo` only when you want to point at another repository.
+By default, `alcove run` targets the current directory. Use `--repo` only when you want to point at another repository.
 
 ## Current capabilities
 
@@ -147,11 +192,19 @@ PYTHONPATH=src python -m agent_runner run task.md --repo /absolute/path/to/targe
 
 ## Install (dev)
 
-Prerequisites:
+One-command setup:
 
-- Python 3.11+
-- Codex CLI installed (`codex --version`)
-- Codex authenticated (`codex login status` should show ChatGPT login)
+```bash
+./scripts/setup-dev.sh
+```
+
+Then confirm the local environment is ready:
+
+```bash
+alcove doctor
+```
+
+Manual setup:
 
 ```bash
 python -m venv .venv
@@ -164,10 +217,16 @@ pip install -e ".[dev]"
 To launch the UI directly, use:
 
 ```bash
-./agent-runner.command
+./alcove.command
 ```
 
-Create a one-click desktop app icon named `agent-runner`:
+Refresh the editable install and rebuild clean launchers after pulling updates:
+
+```bash
+./scripts/refresh-local-install.sh
+```
+
+Install clean macOS launchers in `~/Applications` and `~/Desktop`:
 
 ```bash
 ./scripts/install-desktop-icon.sh
@@ -178,6 +237,8 @@ For faster local iteration, there is also a thin dev-wrapper build:
 ```bash
 ./scripts/build-dev-mac-app.sh
 ```
+
+Use port `8765` for local build and launcher validation. Leave `AGENT_RUNNER_WEB_PORT` unset for normal builds so the wrapper stays on the standard port.
 
 Build the standalone packaged mac app:
 
@@ -194,13 +255,17 @@ The web runtime serves:
 - `/studio/preview/...` for managed studio previews
 - `/play/...` for published studio artifacts
 
-`agent-runner web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
+`alcove web` binds to `127.0.0.1` by default and prints local/LAN URL details at startup.
 
-`agent-runner serve` keeps `0.0.0.0` default binding for easier LAN access.
+`alcove serve` keeps `0.0.0.0` default binding for easier LAN access.
 
 Optional password protection is available with `--password` using HTTP basic auth.
 
-`agent-runner.command` defaults to web mode with `0.0.0.0` bind and password `jungleboogie` (override via `AGENT_RUNNER_WEB_PASSWORD`).
+`alcove.command` defaults to web mode with `0.0.0.0` bind.
+
+The standard local runtime port is `8765`. Build, launcher, and smoke-test docs in this repo assume that port and should not be switched during normal local use.
+
+If you want password protection for LAN or phone access, set `AGENT_RUNNER_WEB_PASSWORD` before launch.
 
 Run artifacts save with build-aware folders such as `run-b0001-<utc-stamp>`, and each run includes `run_metadata.json`.
 

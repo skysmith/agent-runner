@@ -30,8 +30,9 @@ python -m pip install -e ".[dev]"
 
 printf '%s\n' "Setup complete."
 printf '%s\n' "Next:"
-printf '  %s\n' "./agent-runner.command"
+printf '  %s\n' "./alcove.command"
 printf '  %s\n' "Local URL: http://127.0.0.1:8765/"
+printf '  %s\n' "Health check: alcove doctor"
 if command -v tailscale >/dev/null 2>&1; then
   printf '  %s\n' "Tailscale detected: phone access can be enabled through Alcove Settings."
 else

@@ -43,11 +43,12 @@ def read_build_label(repo_path: Path) -> str | None:
         return dirty_token[-3:]
     if build_number:
         return build_number
-    try:
-        package_version = version("secret-agent")
-    except PackageNotFoundError:
-        return None
-    return package_version
+    for package_name in ("alcove", "agent-runner"):
+        try:
+            return version(package_name)
+        except PackageNotFoundError:
+            continue
+    return None
 
 
 def read_worktree_token(repo_path: Path) -> str | None:

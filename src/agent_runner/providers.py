@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.request
@@ -55,6 +56,23 @@ class OllamaProbeResult:
     message: str
 
 
+VISION_MODEL_HINTS = ("vl", "vision", "llava", "bakllava", "minicpm", "moondream")
+CODEX_MODEL_HINTS = ("gpt-", "codex")
+OLLAMA_MODEL_HINTS = (
+    ":",
+    "qwen",
+    "llama",
+    "llava",
+    "gemma",
+    "mistral",
+    "phi",
+    "deepseek",
+    "minicpm",
+    "moondream",
+    "bakllava",
+)
+
+
 def probe_ollama(ollama_host: str, timeout_seconds: float = 1.5) -> OllamaProbeResult:
     version_url = _join_url(ollama_host, "/api/version")
     tags_url = _join_url(ollama_host, "/api/tags")
@@ -87,6 +105,10 @@ def _run_ollama_json(request: ExecutionRequest) -> CodexExecResult:
         "stream": False,
         "format": request.schema,
     }
+    if model_supports_images(request.model):
+        images = _ollama_images_from_prompt(request.prompt)
+        if images:
+            body["images"] = images
     try:
         payload = _http_json(url, body=body, timeout_seconds=request.timeout_seconds)
     except Exception as exc:
@@ -121,3 +143,49 @@ def _http_json(url: str, body: dict | None = None, timeout_seconds: float | None
 
 def _join_url(base: str, path: str) -> str:
     return base.rstrip("/") + path
+
+
+def model_supports_images(model: str) -> bool:
+    normalized = model.strip().lower()
+    return any(hint in normalized for hint in VISION_MODEL_HINTS)
+
+
+def infer_provider_for_model(model: str, default_provider: ProviderKind) -> ProviderKind:
+    normalized = model.strip().lower()
+    if not normalized:
+        return default_provider
+    if any(hint in normalized for hint in CODEX_MODEL_HINTS):
+        return ProviderKind.CODEX
+    if any(hint in normalized for hint in OLLAMA_MODEL_HINTS):
+        return ProviderKind.OLLAMA
+    return default_provider
+
+
+def extract_prompt_screenshot_paths(prompt: str) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for raw_line in prompt.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- Screenshot: "):
+            continue
+        candidate = line.removeprefix("- Screenshot: ").split(" (", 1)[0].strip()
+        if not candidate:
+            continue
+        key = str(Path(candidate).expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(Path(key))
+    return paths
+
+
+def _ollama_images_from_prompt(prompt: str) -> list[str]:
+    images: list[str] = []
+    for path in extract_prompt_screenshot_paths(prompt):
+        try:
+            if not path.is_file():
+                continue
+            images.append(base64.b64encode(path.read_bytes()).decode("ascii"))
+        except OSError:
+            continue
+    return images

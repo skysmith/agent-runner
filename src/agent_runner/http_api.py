@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import mimetypes
 import traceback
@@ -58,7 +59,7 @@ def create_server(
         return payload
 
     class CompanionHandler(BaseHTTPRequestHandler):
-        server_version = "agent-runner-web/1.0"
+        server_version = "alcove-web/1.0"
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -76,6 +77,9 @@ def create_server(
                     return
                 if path == "/api/settings":
                     self._json_response(service.get_settings())
+                    return
+                if path == "/api/setup-check":
+                    self._json_response(service.get_setup_status())
                     return
                 if path == "/api/providers/ollama/models":
                     self._json_response(service.list_ollama_models())
@@ -252,6 +256,27 @@ def create_server(
                         ),
                         status=HTTPStatus.CREATED,
                     )
+                    return
+                if path == "/api/workspaces/import-folder":
+                    body = self._json_body()
+                    repo_path = _body_text(body, "repo_path")
+                    if repo_path:
+                        workspace = service.import_workspace_from_path(
+                            repo_path,
+                            display_name=_body_text(body, "display_name"),
+                            workspace_kind=_body_text(body, "workspace_kind"),
+                        )
+                    else:
+                        if not self._is_loopback_client():
+                            self._error_response(HTTPStatus.FORBIDDEN, "Native folder picker is only available from this machine.")
+                            return
+                        selected_path = service.pick_local_folder_path()
+                        workspace = service.import_workspace_from_path(
+                            selected_path,
+                            display_name=_body_text(body, "display_name"),
+                            workspace_kind=_body_text(body, "workspace_kind"),
+                        )
+                    self._json_response(workspace, status=HTTPStatus.CREATED)
                     return
                 if path.startswith("/api/workspaces/") and path.endswith("/conversations"):
                     body = self._json_body()
@@ -600,7 +625,7 @@ def create_server(
                 return True
             if path.startswith("/api/"):
                 self.send_response(HTTPStatus.UNAUTHORIZED)
-                self.send_header("WWW-Authenticate", 'Basic realm="agent-runner"')
+                self.send_header("WWW-Authenticate", 'Basic realm="alcove"')
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 data = json.dumps({"detail": "Authentication required."}).encode("utf-8")
                 self.send_header("Content-Length", str(len(data)))
@@ -608,7 +633,7 @@ def create_server(
                 self.wfile.write(data)
                 return False
             self.send_response(HTTPStatus.UNAUTHORIZED)
-            self.send_header("WWW-Authenticate", 'Basic realm="agent-runner"')
+            self.send_header("WWW-Authenticate", 'Basic realm="alcove"')
             data = b"Authentication required."
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
@@ -631,6 +656,13 @@ def create_server(
                 return False
             _, supplied_password = decoded.split(":", 1)
             return supplied_password == password
+
+        def _is_loopback_client(self) -> bool:
+            host = str(self.client_address[0] or "").strip()
+            try:
+                return ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                return host in {"localhost"}
 
     return ThreadingHTTPServer((host, port), CompanionHandler)
 

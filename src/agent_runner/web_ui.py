@@ -5,6 +5,12 @@ from html import escape
 from .service import AgentRunnerService
 
 
+_LOCKED_VIEWPORT = (
+    "width=device-width, initial-scale=1, maximum-scale=1, "
+    "user-scalable=no, viewport-fit=cover"
+)
+
+
 def render_workspaces(service: AgentRunnerService) -> str:
     rows = []
     for workspace in service.list_workspaces():
@@ -175,7 +181,7 @@ def render_web_app() -> str:
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="viewport" content="__LOCKED_VIEWPORT__" />
         <title>Alcove</title>
         <style>
           :root {
@@ -192,7 +198,7 @@ def render_web_app() -> str:
             --danger: #b44a3f;
             --ok: #3e6a51;
             --shadow: 0 16px 42px rgba(30, 35, 31, 0.08);
-            --chat-pane-width: clamp(280px, 24vw, 360px);
+            --chat-pane-width: clamp(240px, 20vw, 320px);
             --pane-divider-width: 16px;
           }
           * { box-sizing: border-box; }
@@ -326,6 +332,52 @@ def render_web_app() -> str:
             min-height: 0;
             display: grid;
             grid-template-columns: var(--chat-pane-width) var(--pane-divider-width) minmax(0, 1fr);
+          }
+          .setup-banner {
+            display: none;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e6d4a7;
+            background:
+              linear-gradient(180deg, rgba(249, 241, 216, 0.96), rgba(247, 237, 209, 0.96));
+          }
+          .setup-banner.is-visible {
+            display: block;
+          }
+          .setup-banner-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+          }
+          .setup-banner-title {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #8a6620;
+          }
+          .setup-banner-copy {
+            margin: 6px 0 0;
+            font-size: 13px;
+            color: #5c5034;
+            line-height: 1.5;
+          }
+          .setup-banner-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
+          .setup-banner-list {
+            margin: 10px 0 0;
+            padding-left: 18px;
+            color: #5c5034;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .setup-banner-list li {
+            margin: 0 0 6px;
           }
           .pane {
             min-width: 0;
@@ -582,9 +634,11 @@ def render_web_app() -> str:
             background: #fcfdff;
           }
           .workspace-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            gap: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            margin-top: 10px;
+            border-top: 1px solid var(--line-soft);
           }
           .home-shell {
             display: grid;
@@ -599,7 +653,7 @@ def render_web_app() -> str:
           }
           .home-panel h2,
           .home-panel h3 {
-            margin: 0 0 8px;
+            margin: 0 0 5px;
           }
           .home-panel p {
             margin: 0;
@@ -607,11 +661,17 @@ def render_web_app() -> str:
             color: var(--muted);
             line-height: 1.55;
           }
+          .home-panel p.hero-copy,
+          .home-panel p.dropzone-copy {
+            font-size: 11px;
+            line-height: 1.35;
+            max-width: 36ch;
+          }
           .home-actions {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
-            margin-top: 14px;
+            margin-top: 10px;
           }
           .dropzone {
             border: 0;
@@ -621,7 +681,7 @@ def render_web_app() -> str:
             display: grid;
             align-content: center;
             justify-items: start;
-            gap: 10px;
+            gap: 8px;
             transition: background 120ms ease, box-shadow 120ms ease;
           }
           .dropzone strong {
@@ -642,29 +702,35 @@ def render_web_app() -> str:
           .home-dropzone {
             min-height: 100%;
             align-content: start;
-            padding: 16px 18px 0;
+            padding: 14px 18px 0;
           }
           .workspace-grid.compact {
-            grid-template-columns: 1fr;
+            margin-top: 10px;
           }
           .workspace-card {
             text-align: left;
-            border: 1px solid var(--line);
-            background: #fcfdff;
-            padding: 12px;
+            border: 0;
+            border-bottom: 1px solid var(--line-soft);
+            background: transparent;
+            padding: 10px 0;
             cursor: pointer;
           }
           .workspace-card:hover {
-            background: #f2f6f9;
+            background: transparent;
+            color: var(--accent);
+          }
+          .workspace-card:hover .workspace-card-path,
+          .workspace-card:hover .workspace-card-meta {
+            color: var(--accent);
           }
           .workspace-card-title {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
           }
           .workspace-card-path,
           .workspace-card-meta {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--muted);
             white-space: nowrap;
             overflow: hidden;
@@ -967,9 +1033,37 @@ def render_web_app() -> str:
             padding: 8px 10px;
             border-bottom: 1px solid var(--line-soft);
           }
+          .studio-preview-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
           .studio-preview-label {
             font-size: 11px;
             color: var(--muted);
+          }
+          .studio-preview-link-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--line-soft);
+            background: #f7faf8;
+          }
+          .studio-preview-link-copy {
+            font-size: 11px;
+            color: var(--muted);
+            flex: 1 1 260px;
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+          .studio-preview-link-copy strong {
+            color: var(--ink);
+            font-weight: 600;
           }
           .studio-preview-frame {
             width: 100%;
@@ -1257,10 +1351,17 @@ def render_web_app() -> str:
               grid-template-columns: 1fr;
             }
             .composer {
-              --composer-action-space: 108px;
+              --composer-action-space: 76px;
             }
             .composer textarea {
               min-height: 92px;
+              font-size: 16px;
+            }
+            .context-grid input,
+            .settings-body input,
+            .settings-body select,
+            .settings-body textarea {
+              font-size: 16px;
             }
             .composer-server-dot {
               top: 14px;
@@ -1272,6 +1373,9 @@ def render_web_app() -> str:
               right: 10px;
               bottom: 10px;
               gap: 6px;
+            }
+            .mobile-hide {
+              display: none !important;
             }
             .icon-button, .send-fab {
               width: 30px;
@@ -1306,10 +1410,7 @@ def render_web_app() -> str:
               padding: 4px 6px;
             }
             .composer {
-              --composer-action-space: 86px;
-            }
-            .composer textarea {
-              font-size: 13px;
+              --composer-action-space: 64px;
             }
             .composer-actions {
               right: 8px;
@@ -1351,8 +1452,6 @@ def render_web_app() -> str:
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">Workspace</p>
-                    <button class="menu-item" type="button" onclick="createWorkspace()">Add Workspace</button>
-                    <button class="menu-item" type="button" onclick="importActiveRepositories()">Top Repos</button>
                     <button class="menu-item" type="button" onclick="clearConversation()">Clear Chat</button>
                     <button class="menu-item" type="button" onclick="stopRun()">Stop Run</button>
                   </section>
@@ -1367,6 +1466,7 @@ def render_web_app() -> str:
                 <div id="global-run-chip" class="chip">idle</div>
               </div>
             </header>
+            <section id="setup-banner" class="setup-banner" hidden></section>
             <section id="shell" class="shell">
               <section class="pane thread-pane">
                 <div class="thread">
@@ -1381,7 +1481,7 @@ def render_web_app() -> str:
                       <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
                       <div class="composer-actions">
                         <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
-                        <button id="voice-button" class="icon-button" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
+                        <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
                         <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
                       </div>
                       <input id="composer-attachments" type="file" accept="image/*" multiple hidden onchange="onComposerFilesChanged()" />
@@ -1459,6 +1559,9 @@ def render_web_app() -> str:
                 <label>Reviewer model (optional)
                   <select id="settings-reviewer-model"></select>
                 </label>
+                <label>Vision model (optional)
+                  <select id="settings-vision-model"></select>
+                </label>
                 <label>Max step retries
                   <input id="settings-max-step-retries" type="number" min="0" step="1" />
                 </label>
@@ -1522,6 +1625,7 @@ def render_web_app() -> str:
             eventCursor: '0',
             assistantMode: 'ask',
             reviewPaneHidden: true,
+            setupReport: null,
           };
           const CODEX_MODEL_OPTIONS = [
             { value: 'gpt-5.4', label: 'GPT-5.4 (medium)' },
@@ -1555,6 +1659,9 @@ def render_web_app() -> str:
             ],
           };
           const PANE_WIDTH_STORAGE_KEY = 'alcove-chat-pane-width';
+          const COMPOSER_MODE_STORAGE_KEY = 'alcove-composer-mode-preferences';
+          const WORKSPACE_SELECTION_STORAGE_KEY = 'alcove-selected-workspace';
+          const CONVERSATION_SELECTION_STORAGE_KEY = 'alcove-selected-conversation';
           let paneResizeState = null;
           let dropDepth = 0;
 
@@ -1564,6 +1671,87 @@ def render_web_app() -> str:
 
           function isMobileViewport() {
             return window.matchMedia('(max-width: 880px)').matches;
+          }
+
+          function normalizeComposerMode(value) {
+            return value === 'loop' ? 'loop' : 'message';
+          }
+
+          function composerModePreferenceKey() {
+            return state.workspaceId || state.workspace?.id || 'global';
+          }
+
+          function readComposerModePreferences() {
+            try {
+              const raw = window.localStorage.getItem(COMPOSER_MODE_STORAGE_KEY);
+              const parsed = raw ? JSON.parse(raw) : {};
+              return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (_) {
+              return {};
+            }
+          }
+
+          function writeComposerModePreferences(preferences) {
+            try {
+              window.localStorage.setItem(COMPOSER_MODE_STORAGE_KEY, JSON.stringify(preferences));
+            } catch (_) {}
+          }
+
+          function preferredComposerMode() {
+            const preferences = readComposerModePreferences();
+            const workspaceKey = composerModePreferenceKey();
+            return normalizeComposerMode(preferences[workspaceKey] || preferences.global || 'message');
+          }
+
+          function rememberComposerMode(mode) {
+            const normalized = normalizeComposerMode(mode);
+            const preferences = readComposerModePreferences();
+            const workspaceKey = composerModePreferenceKey();
+            preferences.global = normalized;
+            preferences[workspaceKey] = normalized;
+            writeComposerModePreferences(preferences);
+          }
+
+          function rememberWorkspaceSelection() {
+            try {
+              if (state.workspaceId) {
+                window.localStorage.setItem(WORKSPACE_SELECTION_STORAGE_KEY, state.workspaceId);
+              }
+              if (state.conversationId) {
+                window.localStorage.setItem(CONVERSATION_SELECTION_STORAGE_KEY, state.conversationId);
+              }
+            } catch (_) {}
+          }
+
+          function clearRememberedWorkspaceSelection() {
+            try {
+              window.localStorage.removeItem(WORKSPACE_SELECTION_STORAGE_KEY);
+              window.localStorage.removeItem(CONVERSATION_SELECTION_STORAGE_KEY);
+            } catch (_) {}
+          }
+
+          function requestedWorkspaceSelection() {
+            const params = new URLSearchParams(window.location.search);
+            const workspaceId = (params.get('workspace_id') || '').trim();
+            const conversationId = (params.get('conversation_id') || '').trim();
+            return {
+              fromUrl: params.has('workspace_id') || params.has('conversation_id'),
+              workspaceId: workspaceId || null,
+              conversationId: conversationId || null,
+            };
+          }
+
+          function applyComposerMode(mode, rememberPreference = false) {
+            const preferred = normalizeComposerMode(mode);
+            const resolved = preferred === 'loop' && state.assistantMode !== 'dev' ? 'message' : preferred;
+            const composerMode = document.getElementById('composer-mode');
+            if (composerMode) composerMode.value = resolved;
+            const modeMessage = document.getElementById('menu-mode-message');
+            const modeLoop = document.getElementById('menu-mode-loop');
+            if (modeMessage) modeMessage.classList.toggle('active', resolved === 'message');
+            if (modeLoop) modeLoop.classList.toggle('active', resolved === 'loop');
+            if (rememberPreference) rememberComposerMode(preferred);
+            return resolved;
           }
 
           function openMobilePane(which) {
@@ -1606,8 +1794,8 @@ def render_web_app() -> str:
             const shell = document.getElementById('shell');
             if (!shell) return;
             const totalWidth = shell.clientWidth || window.innerWidth;
-            const min = 240;
-            const max = Math.min(520, Math.max(300, totalWidth * 0.45));
+            const min = 220;
+            const max = Math.min(460, Math.max(280, totalWidth * 0.42));
             const clamped = Math.max(min, Math.min(max, width));
             document.documentElement.style.setProperty('--chat-pane-width', `${clamped}px`);
           }
@@ -1676,6 +1864,41 @@ def render_web_app() -> str:
             window.location.replace(url.toString());
           }
 
+          function renderSetupBanner() {
+            const banner = document.getElementById('setup-banner');
+            if (!banner) return;
+            const report = state.setupReport;
+            if (!report || report.ok) {
+              banner.hidden = true;
+              banner.classList.remove('is-visible');
+              banner.innerHTML = '';
+              return;
+            }
+            const failedChecks = (report.checks || []).filter((check) => !check.ok);
+            const items = failedChecks
+              .map((check) => {
+                const detail = escapeHtml(check.detail || '');
+                const fix = check.fix ? ` Fix: ${escapeHtml(check.fix)}` : '';
+                return `<li><strong>${escapeHtml(check.label || check.key || 'Setup item')}</strong>: ${detail}${fix}</li>`;
+              })
+              .join('');
+            banner.hidden = false;
+            banner.classList.add('is-visible');
+            banner.innerHTML = `
+              <div class="setup-banner-head">
+                <div>
+                  <p class="setup-banner-title">Setup Needed</p>
+                  <p class="setup-banner-copy">This machine is missing something Alcove needs before Codex work can run. Fix the items below, then refresh this page or run <code>alcove doctor</code> in the repo.</p>
+                </div>
+                <div class="setup-banner-actions">
+                  <button type="button" onclick="hardRefresh()">Refresh</button>
+                  <button type="button" onclick="openSettings()">Settings</button>
+                </div>
+              </div>
+              <ul class="setup-banner-list">${items}</ul>
+            `;
+          }
+
           async function copyText(text) {
             try {
               await navigator.clipboard.writeText(text);
@@ -1710,9 +1933,8 @@ def render_web_app() -> str:
           }
 
           function updateControls() {
-            const active = isActiveState(state.runStatus.state);
             const hasConversation = Boolean(state.conversationId && state.workspaceId);
-            const busy = active || state.submitting;
+            const busy = state.submitting;
             const ids = ['attach-button', 'voice-button', 'send-button'];
             for (const id of ids) {
               const el = document.getElementById(id);
@@ -1827,6 +2049,35 @@ def render_web_app() -> str:
             const date = new Date(value);
             if (Number.isNaN(date.valueOf())) return value;
             return date.toLocaleString();
+          }
+
+          function parseTimestamp(value) {
+            if (!value) return null;
+            const date = new Date(value);
+            return Number.isNaN(date.valueOf()) ? null : date;
+          }
+
+          function formatElapsedDuration(milliseconds) {
+            const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+            if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+            return `${seconds}s`;
+          }
+
+          function currentRunElapsedLabel(status) {
+            const stateText = String(status?.state || 'idle');
+            const startedAt = parseTimestamp(status?.started_at || status?.updated_at || status?.heartbeat_at);
+            if (!startedAt) return '';
+            if (isActiveState(stateText)) {
+              return formatElapsedDuration(Date.now() - startedAt.valueOf());
+            }
+            if (stateText !== 'succeeded' && stateText !== 'failed') return '';
+            const finishedAt = parseTimestamp(status?.finished_at || status?.updated_at);
+            if (!finishedAt) return '';
+            return formatElapsedDuration(finishedAt.valueOf() - startedAt.valueOf());
           }
 
           function escapeHtml(value) {
@@ -1951,18 +2202,67 @@ def render_web_app() -> str:
             return 'Building';
           }
 
+          function absoluteWorkspaceUrl(path, target = 'current') {
+            const value = String(path || '').trim();
+            if (!value) return '';
+            if (/^https?:\/\//i.test(value)) return value;
+            const base =
+              target === 'phone'
+                ? (state.serverInfo?.phone_url || '')
+                : target === 'local'
+                  ? (state.serverInfo?.local_url || state.serverInfo?.localhost_url || '')
+                  : window.location.origin;
+            if (!base) return value;
+            try {
+              return new URL(value, base.endsWith('/') ? base : `${base}/`).toString();
+            } catch (_) {
+              return value;
+            }
+          }
+
+          function studioWorkspaceLinks(workspace = state.workspace) {
+            const previewPath = String(workspace?.preview_url || '').trim();
+            const publishPath = String(workspace?.publish_url || '').trim();
+            return {
+              preview_current: absoluteWorkspaceUrl(previewPath, 'current'),
+              preview_local: absoluteWorkspaceUrl(previewPath, 'local'),
+              preview_phone: absoluteWorkspaceUrl(previewPath, 'phone'),
+              publish_current: absoluteWorkspaceUrl(publishPath, 'current'),
+              publish_local: absoluteWorkspaceUrl(publishPath, 'local'),
+              publish_phone: absoluteWorkspaceUrl(publishPath, 'phone'),
+            };
+          }
+
+          function openStudioWorkspaceLink(kind = 'preview_current') {
+            const url = studioWorkspaceLinks()[kind] || '';
+            if (!url) {
+              window.alert('That workspace link is not available yet.');
+              return;
+            }
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+
+          async function copyStudioWorkspaceLink(kind = 'preview_phone') {
+            const url = studioWorkspaceLinks()[kind] || '';
+            if (!url) {
+              window.alert('That workspace link is not available yet.');
+              return;
+            }
+            await copyText(url);
+          }
+
           function renderWorkspaceSelector(workspaces) {
             const host = document.getElementById('thread-scroll');
             host.classList.add('home-scroll');
             if (!workspaces.length) {
               host.innerHTML = `
                 <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                  <h2>Alcove Studio</h2>
-                  <p>Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
-                  <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
+                  <h2>Alcove</h2>
+                  <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
+                  <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                    <button type="button" onclick="promptImportWorkspace()">Import</button>
                   </div>
                   <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
                 </section>
@@ -1971,12 +2271,12 @@ def render_web_app() -> str:
             }
             host.innerHTML = `
               <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                <h2>Alcove Studio</h2>
-                <p>Build games, websites, data views, and docs with one workspace chat and a live preview beside it.</p>
-                <p class="dropzone-copy">Drop a local project folder anywhere in this left panel to create a mapped workspace automatically.</p>
+                <h2>Alcove</h2>
+                <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
+                <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
                 <div class="home-actions">
                   <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                  <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                  <button type="button" onclick="promptImportWorkspace()">Import</button>
                 </div>
                 <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
                 <section class="workspace-grid">
@@ -2005,27 +2305,61 @@ def render_web_app() -> str:
             updateControls();
           }
 
+          async function restoreWorkspaceSelection() {
+            const requested = requestedWorkspaceSelection();
+            const storedWorkspaceId = (() => {
+              try {
+                return (window.localStorage.getItem(WORKSPACE_SELECTION_STORAGE_KEY) || '').trim();
+              } catch (_) {
+                return '';
+              }
+            })();
+            const storedConversationId = (() => {
+              try {
+                return (window.localStorage.getItem(CONVERSATION_SELECTION_STORAGE_KEY) || '').trim();
+              } catch (_) {
+                return '';
+              }
+            })();
+            const workspaceId = requested.workspaceId || storedWorkspaceId || null;
+            const conversationId = requested.conversationId || storedConversationId || null;
+            if (!workspaceId) {
+              renderWorkspaceSelector(state.workspaces || []);
+              return false;
+            }
+            if (!(state.workspaces || []).some((workspace) => workspace.id === workspaceId)) {
+              clearRememberedWorkspaceSelection();
+              renderWorkspaceSelector(state.workspaces || []);
+              return false;
+            }
+            await selectWorkspace(workspaceId, conversationId);
+            if (requested.fromUrl && window.history && window.history.replaceState) {
+              window.history.replaceState({}, '', window.location.pathname);
+            }
+            return true;
+          }
+
           function renderHomePane() {
             const recent = (state.workspaces || []).slice(0, 4);
             return `
               <section class="home-shell">
                 <section class="home-panel">
-                  <h2>Alcove Studio</h2>
-                  <p>Pick a workspace, start a new Studio, or drop a local project folder here to map it into Alcove.</p>
+                  <h2>Bring in a project</h2>
+                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
                   <div class="home-actions">
                     <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import Folder</button>
+                    <button type="button" onclick="promptImportWorkspace()">Import</button>
                   </div>
                   <div id="workspace-dropzone" class="dropzone">
-                    <strong>Drop a folder to create a mapped workspace</strong>
-                    <p class="dropzone-copy">Drag a project folder from Finder into Alcove and it will create a workspace pointing at that path.</p>
+                    <strong>Drop a folder to map a local project</strong>
+                    <p class="dropzone-copy">Drag a project folder from Finder into Alcove and it will create a workspace for that repo.</p>
                     <div class="dropzone-hint">Best on desktop. If the browser hides the file path, Alcove will ask you to paste it.</div>
                   </div>
                 </section>
                 <section class="home-panel">
                   <h3>Recent Workspaces</h3>
-                  <p>Jump back into the projects you were using most recently.</p>
-                  <section class="workspace-grid compact" style="margin-top: 14px;">
+                  <p>Pick up where you left off.</p>
+                  <section class="workspace-grid compact">
                     ${recent.length ? recent.map((workspace) => `
                       <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
                         <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
@@ -2063,7 +2397,7 @@ def render_web_app() -> str:
           function renderStatus(status) {
             state.runStatus = status || { state: 'idle', step: 'Idle' };
             const stateText = String(state.runStatus.state || 'idle');
-            setChip('global-run-chip', `run: ${stateText}`, stateText);
+            updateRunChip();
             const active = isActiveState(stateText);
             if (!state.serverInfo) {
               setServerDot('offline', 'Offline');
@@ -2081,6 +2415,32 @@ def render_web_app() -> str:
             }
             updateStudioModeUI();
             updateControls();
+          }
+
+          function updateRunChip() {
+            const status = state.runStatus || { state: 'idle', step: 'Idle' };
+            const stateText = String(status.state || 'idle');
+            const elapsed = currentRunElapsedLabel(status);
+            const queueCount = Number(status.queue_count || 0);
+            let label = elapsed ? `${stateText} (${elapsed})` : stateText;
+            if (queueCount > 0) {
+              label = `${label} +${queueCount} queued`;
+            }
+            setChip('global-run-chip', label, stateText);
+            const chip = document.getElementById('global-run-chip');
+            if (!chip) return;
+            if (elapsed && isActiveState(stateText)) {
+              chip.title = `Running for ${elapsed}${status.started_at ? ` since ${formatStamp(status.started_at)}` : ''}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
+              return;
+            }
+            if (elapsed && (stateText === 'succeeded' || stateText === 'failed')) {
+              const finishedAt = status.finished_at || status.updated_at;
+              chip.title = `Last run ${stateText} after ${elapsed}${finishedAt ? ` at ${formatStamp(finishedAt)}` : ''}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
+              return;
+            }
+            chip.title = status.started_at
+              ? `Last started ${formatStamp(status.started_at)}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`
+              : `Run status: ${stateText}${queueCount > 0 ? ` with ${queueCount} queued` : ''}`;
           }
 
           function toggleReviewPane() {
@@ -2106,8 +2466,8 @@ def render_web_app() -> str:
               host.classList.remove('studio-scroll');
               if (actions) actions.innerHTML = '';
               if (eyebrow) eyebrow.textContent = 'Home';
-              if (title) title.textContent = 'Alcove Studio';
-              if (copy) copy.textContent = 'Bring a workspace into Alcove or start a new Studio.';
+              if (title) title.textContent = 'Bring in a project';
+              if (copy) copy.textContent = 'Open a repo or start a Studio. Preview, publish, and run details show up here.';
               host.innerHTML = renderHomePane();
               return;
             }
@@ -2135,6 +2495,8 @@ def render_web_app() -> str:
             const run = payload.run || {};
             const checks = payload.checks || {};
             const changedFiles = payload.changed_files || [];
+            const queue = payload.queue || {};
+            const queuedItems = queue.items || [];
             const summary = payload.summary || 'No summary yet.';
             const latest = (payload.latest_result && payload.latest_result.content) || '';
             host.innerHTML = `
@@ -2143,7 +2505,16 @@ def render_web_app() -> str:
                 <p class="review-line">State: ${escapeHtml(run.state || 'idle')}</p>
                 <p class="review-line subtle">Step: ${escapeHtml(run.step || 'Idle')}</p>
                 <p class="review-line subtle">Mode: ${escapeHtml(run.mode || 'message')}</p>
+                <p class="review-line subtle">Queued: ${escapeHtml(String(run.queue_count ?? queue.global_count ?? 0))}</p>
                 <p class="review-line subtle">Updated: ${escapeHtml(formatStamp(run.updated_at))}</p>
+              </section>
+              <section class="review-card">
+                <p class="review-title">Queued Messages</p>
+                ${
+                  queuedItems.length
+                    ? `<ul class="review-list">${queuedItems.map((item) => `<li>#${escapeHtml(String(item.position || '?'))}: ${escapeHtml(item.content_preview || '')}</li>`).join('')}</ul>`
+                    : '<p class="review-line subtle">No queued messages for this chat.</p>'
+                }
               </section>
               <section class="review-card">
                 <p class="review-title">Summary</p>
@@ -2178,9 +2549,12 @@ def render_web_app() -> str:
 
           function renderStudioPane() {
             const workspace = state.workspace || {};
+            const links = studioWorkspaceLinks(workspace);
             const previewUrl = workspace.preview_url ? `${workspace.preview_url}${workspace.preview_url.includes('?') ? '&' : '?'}v=${Date.now()}` : '';
             const publishUrl = workspace.publish_url || '';
             const workspaceKind = workspace.workspace_kind || 'studio_game';
+            const previewLink = links.preview_current || '';
+            const phonePreviewLink = links.preview_phone || '';
             return `
               <section class="studio-shell">
                 <section class="studio-preview-card">
@@ -2191,8 +2565,17 @@ def render_web_app() -> str:
                       <div class="studio-pill">${escapeHtml(childFriendlyPreviewState(workspace))}</div>
                       <div class="studio-pill">${escapeHtml(workspace.publish_state === 'published' ? 'Published' : 'Not Published')}</div>
                     </div>
-                    ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
+                    <div class="studio-preview-actions">
+                      ${previewLink ? `<button type="button" onclick="openStudioWorkspaceLink('preview_current')">${escapeHtml(studioPrimaryAction(workspaceKind))} Link</button>` : ''}
+                      ${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Link</button>` : ''}
+                      ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
+                    </div>
                   </div>
+                  ${
+                    previewLink
+                      ? `<div class="studio-preview-link-row"><div class="studio-preview-link-copy"><strong>${escapeHtml(studioPrimaryAction(workspaceKind))} address:</strong> ${escapeHtml(previewLink)}</div>${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Address</button>` : `<button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Address</button>`}</div>`
+                      : ''
+                  }
                   ${
                     previewUrl
                       ? `<iframe class="studio-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(studioArtifactNoun(workspaceKind))} preview"></iframe>`
@@ -2210,12 +2593,16 @@ def render_web_app() -> str:
               return;
             }
             const workspace = state.workspace || {};
+            const links = studioWorkspaceLinks(workspace);
             const lines = [
               `Title: ${workspace.artifact_title || workspace.game_title || workspace.display_name || 'Alcove Studio'}`,
               `Studio: ${studioKindLabel(workspace.workspace_kind)}`,
               `Template: ${workspace.template_kind || 'blank'}`,
               `Preview URL: ${workspace.preview_url || 'Not ready yet'}`,
+              `Local preview address: ${links.preview_local || 'Not ready yet'}`,
+              `Phone preview address: ${links.preview_phone || 'Phone access not available'}`,
               `Publish URL: ${workspace.publish_url || 'Not published yet'}`,
+              `Phone publish address: ${links.publish_phone || 'Not published yet'}`,
               `Repo path: ${workspace.repo_path || 'Managed by Alcove'}`,
             ];
             window.alert(lines.join('\\n'));
@@ -2232,15 +2619,16 @@ def render_web_app() -> str:
               state.conversationId = null;
               state.workspaceId = null;
               state.lastSignature = null;
+              clearRememberedWorkspaceSelection();
               renderWorkspaceSelector(workspaces);
             }
           }
 
-          async function selectWorkspace(workspaceId) {
+          async function selectWorkspace(workspaceId, conversationIdOverride = null) {
             state.workspaceId = workspaceId;
             const workspace = await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
             state.workspace = workspace;
-            state.conversationId = workspace.active_conversation_id || null;
+            state.conversationId = conversationIdOverride || workspace.active_conversation_id || null;
             state.reviewPaneHidden = false;
             closeMobilePanes();
             applyReviewPaneVisibility();
@@ -2251,11 +2639,22 @@ def render_web_app() -> str:
 
           async function loadConversationDetail() {
             if (!state.conversationId || !state.workspaceId) return;
-            const payload = await fetchJson(
-              `/api/conversations/${encodeURIComponent(state.conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`
-            );
+            let payload;
+            try {
+              payload = await fetchJson(
+                `/api/conversations/${encodeURIComponent(state.conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`
+              );
+            } catch (error) {
+              const fallbackConversationId = state.workspace?.active_conversation_id || null;
+              if (fallbackConversationId && fallbackConversationId !== state.conversationId) {
+                state.conversationId = fallbackConversationId;
+                return loadConversationDetail();
+              }
+              throw error;
+            }
             state.workspaceId = payload.workspace_id;
             state.workspace = state.workspaces.find((workspace) => workspace.id === state.workspaceId) || state.workspace;
+            rememberWorkspaceSelection();
             syncAssistantModeUI(payload.assistant_mode || 'ask');
             const signature = JSON.stringify({
               updated_at: payload.updated_at,
@@ -2289,20 +2688,8 @@ def render_web_app() -> str:
             const textarea = document.getElementById('composer');
             if (!textarea) return;
             if (isStudioWorkspace(state.workspace)) {
-              document.getElementById('composer-mode').value = 'loop';
-              document.getElementById('assistant-mode').value = 'dev';
-              state.assistantMode = 'dev';
+              syncAssistantModeUI('dev');
               textarea.placeholder = studioPlaceholder(state.workspace?.workspace_kind);
-              const modeMessage = document.getElementById('menu-mode-message');
-              const modeLoop = document.getElementById('menu-mode-loop');
-              if (modeMessage) modeMessage.classList.remove('active');
-              if (modeLoop) modeLoop.classList.add('active');
-              const ask = document.getElementById('menu-assistant-ask');
-              const ops = document.getElementById('menu-assistant-ops');
-              const dev = document.getElementById('menu-assistant-dev');
-              if (ask) ask.classList.remove('active');
-              if (ops) ops.classList.remove('active');
-              if (dev) dev.classList.add('active');
             } else {
               textarea.placeholder = 'Describe what should happen next.';
             }
@@ -2313,11 +2700,7 @@ def render_web_app() -> str:
               window.alert('Loop mode requires dev capability mode.');
               return;
             }
-            document.getElementById('composer-mode').value = mode;
-            const modeMessage = document.getElementById('menu-mode-message');
-            const modeLoop = document.getElementById('menu-mode-loop');
-            if (modeMessage) modeMessage.classList.toggle('active', mode === 'message');
-            if (modeLoop) modeLoop.classList.toggle('active', mode === 'loop');
+            applyComposerMode(mode, true);
             closeActionsMenu();
           }
 
@@ -2331,11 +2714,7 @@ def render_web_app() -> str:
             if (ask) ask.classList.toggle('active', resolved === 'ask');
             if (ops) ops.classList.toggle('active', resolved === 'ops');
             if (dev) dev.classList.toggle('active', resolved === 'dev');
-            if (resolved !== 'dev' && document.getElementById('composer-mode').value === 'loop') {
-              document.getElementById('composer-mode').value = 'message';
-              if (document.getElementById('menu-mode-message')) document.getElementById('menu-mode-message').classList.add('active');
-              if (document.getElementById('menu-mode-loop')) document.getElementById('menu-mode-loop').classList.remove('active');
-            }
+            applyComposerMode(preferredComposerMode());
             updateControls();
           }
 
@@ -2423,12 +2802,23 @@ def render_web_app() -> str:
               payload.reviewer_model || '',
               { allowBlank: true, blankLabel: 'Use default model' }
             );
+            setSelectOptions(
+              'settings-vision-model',
+              modelOptionUnion([]),
+              payload.vision_model || '',
+              { allowBlank: true, blankLabel: 'Use default model' }
+            );
           }
 
           function renderConnectionsPanel() {
             const host = document.getElementById('connections-panel');
             if (!host) return;
             const info = state.serverInfo || {};
+            const setupReport = state.setupReport || {};
+            const workspace = state.workspace || {};
+            const workspaceLinks = studioWorkspaceLinks(workspace);
+            const hasProjectPreview = Boolean(workspace.preview_url && workspaceLinks.preview_current);
+            const currentProjectName = workspace.artifact_title || workspace.game_title || workspace.display_name || workspace.id || 'Current project';
             const localUrl = info.local_url || info.localhost_url || 'http://127.0.0.1:8765/';
             const phoneUrl = info.phone_url || '';
             const phoneEnabled = Boolean(info.phone_enabled && phoneUrl);
@@ -2436,6 +2826,40 @@ def render_web_app() -> str:
             const repoPath = info.repo_path || 'Unknown repo';
             const port = info.bind_port || '8765';
             host.innerHTML = `
+              ${setupReport.ok === false ? `
+                <article class="connection-card">
+                  <div class="connection-title">
+                    <span>Setup</span>
+                    <span class="connection-state">Needs attention</span>
+                  </div>
+                  <p class="connection-copy">Alcove detected a local setup issue. Run <code>alcove doctor</code> in this repo after fixing the items below.</p>
+                  <div class="connection-meta">
+                    ${(setupReport.checks || [])
+                      .filter((check) => !check.ok)
+                      .map((check) => `${escapeHtml(check.label || check.key)}: ${escapeHtml(check.fix || check.detail || '')}`)
+                      .join('<br />')}
+                  </div>
+                </article>
+              ` : ''}
+              ${hasProjectPreview ? `
+                <article class="connection-card">
+                  <div class="connection-title">
+                    <span>Current Project</span>
+                    <span class="connection-state">${escapeHtml(currentProjectName)}</span>
+                  </div>
+                  <p class="connection-copy">Open the active workspace preview directly from this phone, or copy a separate game address to share across devices while you keep working in Alcove.</p>
+                  <p class="connection-url">${escapeHtml(workspaceLinks.preview_current)}</p>
+                  <div class="connection-actions">
+                    <button type="button" onclick="openStudioWorkspaceLink('preview_current')">Open Project</button>
+                    <button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Project Link</button>
+                    <button type="button" onclick="copyStudioWorkspaceLink('preview_phone')" ${workspaceLinks.preview_phone ? '' : 'disabled'}>Copy Phone Game Link</button>
+                  </div>
+                  <div class="connection-meta">
+                    Local preview: ${escapeHtml(workspaceLinks.preview_local || 'Not ready yet')}<br />
+                    Phone preview: ${escapeHtml(workspaceLinks.preview_phone || 'Phone access not available')}
+                  </div>
+                </article>
+              ` : ''}
               <article class="connection-card">
                 <div class="connection-title">
                   <span>This Mac</span>
@@ -2553,6 +2977,7 @@ def render_web_app() -> str:
               setSelectOptions('settings-planner-model', options, settings.planner_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-builder-model', options, settings.builder_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-reviewer-model', options, settings.reviewer_model || '', { allowBlank: true, blankLabel: 'Use default model' });
+              setSelectOptions('settings-vision-model', options, settings.vision_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               if (status) status.textContent = payload.message || `Found ${models.length} model(s).`;
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not fetch Ollama models.';
@@ -2572,6 +2997,7 @@ def render_web_app() -> str:
                   planner_model: document.getElementById('settings-planner-model').value,
                   builder_model: document.getElementById('settings-builder-model').value,
                   reviewer_model: document.getElementById('settings-reviewer-model').value,
+                  vision_model: document.getElementById('settings-vision-model').value,
                   max_step_retries: Number(document.getElementById('settings-max-step-retries').value || 2),
                   phase_timeout_seconds: Number(document.getElementById('settings-phase-timeout').value || 240),
                 }),
@@ -2593,6 +3019,7 @@ def render_web_app() -> str:
             const input = document.getElementById('composer-attachments');
             const files = Array.from((input && input.files) || []);
             const content = textarea.value.trim();
+            const mode = document.getElementById('composer-mode').value;
             if (!content && !files.length) {
               window.alert('Type a prompt or attach a screenshot first.');
               return false;
@@ -2603,7 +3030,7 @@ def render_web_app() -> str:
               if (files.length) {
                 const formData = new FormData();
                 formData.append('content', content);
-                formData.append('mode', document.getElementById('composer-mode').value);
+                formData.append('mode', mode);
                 formData.append('assistant_mode', document.getElementById('assistant-mode').value);
                 formData.append('workspace_id', state.workspaceId);
                 files.forEach((file) => formData.append('attachments', file));
@@ -2617,7 +3044,7 @@ def render_web_app() -> str:
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({
                     content,
-                    mode: document.getElementById('composer-mode').value,
+                    mode,
                     assistant_mode: document.getElementById('assistant-mode').value,
                     workspace_id: state.workspaceId,
                   }),
@@ -2674,21 +3101,15 @@ def render_web_app() -> str:
             const cleanPath = trimmedPath.replace(/^file:\/\//, '');
             const segments = cleanPath.split('/').filter(Boolean);
             const folderName = String(displayName || segments[segments.length - 1] || 'workspace').trim();
-            const workspaceId = slugifyWorkspaceId(folderName);
-            if (!workspaceId) {
-              window.alert('Could not create a workspace id from that folder.');
-              return;
-            }
-            const workspace = await fetchJson('/api/workspaces', {
+            const workspace = await fetchJson('/api/workspaces/import-folder', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                id: workspaceId,
                 display_name: folderName,
                 repo_path: decodeURIComponent(cleanPath),
               }),
             });
-            state.workspaceId = workspace.id || workspaceId;
+            state.workspaceId = workspace.id || slugifyWorkspaceId(folderName);
             state.conversationId = workspace.active_conversation_id || null;
             state.lastSignature = null;
             await loadWorkspaces();
@@ -2697,7 +3118,24 @@ def render_web_app() -> str:
           }
 
           async function promptImportWorkspace() {
-            const folderPath = (window.prompt('Paste the local folder path to map into Alcove.', '') || '').trim();
+            try {
+              const workspace = await fetchJson('/api/workspaces/import-folder', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({}),
+              });
+              state.workspaceId = workspace.id || null;
+              state.conversationId = workspace.active_conversation_id || null;
+              state.lastSignature = null;
+              await loadWorkspaces();
+              await loadConversationDetail();
+              await loadReview();
+              return;
+            } catch (error) {
+              const message = String(error?.message || '');
+              if (message.toLowerCase().includes('cancelled')) return;
+            }
+            const folderPath = (window.prompt('Paste the local folder path to import into Alcove.', '') || '').trim();
             if (!folderPath) return;
             try {
               await createWorkspaceFromFolderPath(folderPath);
@@ -2727,7 +3165,7 @@ def render_web_app() -> str:
             setDropzoneActive(false);
             const droppedPath = extractDroppedFolderPath(event.dataTransfer);
             if (!droppedPath) {
-              window.alert('Finder did not share a folder path here. Please use Import Folder and paste the path.');
+              window.alert('Finder did not share a folder path here. Use Import to open the native picker.');
               return;
             }
             try {
@@ -2939,6 +3377,15 @@ def render_web_app() -> str:
             renderStatus(state.runStatus);
           }
 
+          async function loadSetupStatus() {
+            try {
+              state.setupReport = await fetchJson('/api/setup-check');
+            } catch (_) {
+              state.setupReport = null;
+            }
+            renderSetupBanner();
+          }
+
           async function pollStatus() {
             try {
               const status = await fetchJson('/api/run-status');
@@ -2992,17 +3439,20 @@ def render_web_app() -> str:
           }
 
           async function bootstrap() {
-            setMode('message');
             syncAssistantModeUI('ask');
             renderStatus({ state: 'idle', step: 'Loading workspaces' });
             applyStoredPaneLayout();
             bindPaneDivider();
             applyReviewPaneVisibility();
             bindWorkspaceDropTargets();
+            await loadSetupStatus();
             await loadServerInfo();
             await loadWorkspaces();
+            const restoredSelection = await restoreWorkspaceSelection();
             await pollStatus();
-            await loadReview();
+            if (!restoredSelection) {
+              await loadReview();
+            }
             updateControls();
             applyMobileDefaults();
             syncKeyboardInset();
@@ -3029,8 +3479,10 @@ def render_web_app() -> str:
               });
             }
             window.setInterval(pollEvents, 1200);
+            window.setInterval(updateRunChip, 1000);
             window.setInterval(pollStatus, 5000);
             window.setInterval(loadServerInfo, 10000);
+            window.setInterval(loadSetupStatus, 15000);
             window.addEventListener('resize', () => {
               applyStoredPaneLayout();
               applyMobileDefaults();
@@ -3044,7 +3496,7 @@ def render_web_app() -> str:
         </script>
       </body>
     </html>
-    """
+    """.replace("__LOCKED_VIEWPORT__", _LOCKED_VIEWPORT)
 
 def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_body: str) -> str:
     return f"""
@@ -3052,7 +3504,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="viewport" content="{_LOCKED_VIEWPORT}" />
         <title>Alcove Companion</title>
         <style>
           :root {{
@@ -3127,18 +3579,25 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
           .rail {{
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 0;
+            border-top: 1px solid var(--line);
           }}
           .rail-item {{
             display: block;
             text-decoration: none;
             color: inherit;
-            border: 1px solid var(--line);
-            background: #f7f8fb;
-            padding: 10px;
+            border: 0;
+            border-bottom: 1px solid var(--line);
+            background: transparent;
+            padding: 10px 0;
+          }}
+          .rail-item:hover {{
+            color: var(--accent);
           }}
           .rail-item-active {{
-            background: #edf1f4;
+            background: transparent;
+            box-shadow: inset 2px 0 0 var(--accent);
+            padding-left: 8px;
           }}
           .rail-title {{
             font-size: 13px;
@@ -3153,6 +3612,9 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             font-size: 12px;
             color: var(--muted);
             line-height: 1.35;
+          }}
+          .rail-item:hover .rail-meta {{
+            color: var(--accent);
           }}
           .main {{
             flex: 1;
@@ -3277,7 +3739,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             background: transparent;
             color: var(--ink);
             font: inherit;
-            font-size: 14px;
+            font-size: 16px;
             line-height: 1.35;
             outline: none;
             max-width: 100%;

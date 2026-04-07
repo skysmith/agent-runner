@@ -3,6 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+for extra_path in \
+  "$HOME/.npm-global/bin" \
+  "$HOME/.local/bin" \
+  "$HOME/.volta/bin" \
+  "$HOME/.yarn/bin" \
+  "$HOME/.cargo/bin" \
+  "/opt/homebrew/bin" \
+  "/usr/local/bin"; do
+  if [[ -d "$extra_path" && ":${PATH:-}:" != *":$extra_path:"* ]]; then
+    PATH="${PATH:+$PATH:}$extra_path"
+  fi
+done
+export PATH
 TTY_PATH="$(tty || true)"
 TERM_PROGRAM_NAME="${TERM_PROGRAM:-}"
 LOG_DIR="${SCRIPT_DIR}/.agent-runner/logs"
@@ -28,6 +41,20 @@ if [[ -z "$PYTHON_BIN" ]]; then
   echo "Could not find a usable python3 interpreter." >&2
   exit 1
 fi
+
+run_doctor_check() {
+  local doctor_output
+  if doctor_output="$("$PYTHON_BIN" -m agent_runner doctor --repo "$SCRIPT_DIR" 2>&1)"; then
+    return 0
+  fi
+  {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Doctor check failed"
+    printf '%s\n' "$doctor_output"
+  } >>"$LOG_FILE"
+  printf '%s\n' "$doctor_output" >&2
+  return 0
+}
+run_doctor_check
 
 close_origin_terminal_session() {
   # Close only the terminal session that launched this script.
@@ -70,22 +97,52 @@ APPLESCRIPT
 }
 
 WEB_HOST="${AGENT_RUNNER_WEB_HOST:-0.0.0.0}"
-WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
-WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-jungleboogie}"
-APP_URL="${AGENT_RUNNER_URL:-http://127.0.0.1:${WEB_PORT}}"
-OPEN_URL="${APP_URL}$([[ "$APP_URL" == *\?* ]] && printf '&' || printf '?')_ar_open=$(date +%s)"
-URL_FILE="${SCRIPT_DIR}/.agent-runner/web-url"
+DEFAULT_WEB_PORT="${AGENT_RUNNER_WEB_PORT:-8765}"
+WEB_PASSWORD="${AGENT_RUNNER_WEB_PASSWORD:-}"
+EXPLICIT_APP_URL="${AGENT_RUNNER_URL:-}"
+STATE_DIR="${SCRIPT_DIR}/.agent-runner"
+URL_FILE="${STATE_DIR}/web-url"
 
-{
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
-} >>"$LOG_FILE"
+mkdir -p "$STATE_DIR"
 
-mkdir -p "$(dirname "$URL_FILE")"
-printf '%s\n' "$APP_URL" >"$URL_FILE"
+read_saved_url() {
+  if [[ -n "$EXPLICIT_APP_URL" ]]; then
+    printf '%s\n' "$EXPLICIT_APP_URL"
+    return 0
+  fi
+  printf 'http://127.0.0.1:%s\n' "$DEFAULT_WEB_PORT"
+}
+
+url_port() {
+  "$PYTHON_BIN" - "$1" "$DEFAULT_WEB_PORT" <<'PY'
+from __future__ import annotations
+
+import sys
+from urllib.parse import urlparse
+
+url = sys.argv[1].strip()
+fallback = int(sys.argv[2])
+try:
+    parsed = urlparse(url)
+    port = parsed.port
+except Exception:
+    port = None
+print(port or fallback)
+PY
+}
+
+write_current_url() {
+  printf '%s\n' "$1" >"$URL_FILE"
+}
+
+build_open_url() {
+  local base_url="$1"
+  printf '%s%s_ar_open=%s\n' "$base_url" "$([[ "$base_url" == *\?* ]] && printf '&' || printf '?')" "$(date +%s)"
+}
 
 server_matches_expected() {
-  "$PYTHON_BIN" - "$APP_URL" "$WEB_PASSWORD" "$SCRIPT_DIR" <<'PY'
+  local candidate_url="$1"
+  "$PYTHON_BIN" - "$candidate_url" "$WEB_PASSWORD" "$SCRIPT_DIR" <<'PY'
 import base64
 import json
 import sys
@@ -94,8 +151,9 @@ import urllib.request
 
 url, password, expected_repo = sys.argv[1:4]
 request = urllib.request.Request(url.rstrip("/") + "/api/server-info")
-token = base64.b64encode(f"user:{password}".encode("utf-8")).decode("ascii")
-request.add_header("Authorization", f"Basic {token}")
+if password:
+    token = base64.b64encode(f"user:{password}".encode("utf-8")).decode("ascii")
+    request.add_header("Authorization", f"Basic {token}")
 try:
     with urllib.request.urlopen(request, timeout=1.5) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -109,24 +167,44 @@ sys.exit(0)
 PY
 }
 
-if server_matches_expected; then
+PREFERRED_URL="$(read_saved_url)"
+if server_matches_expected "$PREFERRED_URL"; then
+  write_current_url "$PREFERRED_URL"
+  OPEN_URL="$(build_open_url "$PREFERRED_URL")"
   open "$OPEN_URL"
   close_origin_terminal_session
   exit 0
 fi
 
-nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" bash -lc 'exec -a "agent-runner" "$0" -m agent_runner web --repo "$1" --host "$2" --port "$3" --password "$4"' "$PYTHON_BIN" "$SCRIPT_DIR" "$WEB_HOST" "$WEB_PORT" "$WEB_PASSWORD" >>"$LOG_FILE" 2>&1 &
+PREFERRED_PORT="$(url_port "$PREFERRED_URL")"
+LAUNCH_PORT="$PREFERRED_PORT"
+APP_URL="${EXPLICIT_APP_URL:-http://127.0.0.1:${LAUNCH_PORT}}"
+OPEN_URL="$(build_open_url "$APP_URL")"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching with ${PYTHON_BIN}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Opening ${APP_URL}"
+} >>"$LOG_FILE"
+
+write_current_url "$APP_URL"
+
+LAUNCH_CMD=( "$PYTHON_BIN" -m agent_runner web --repo "$SCRIPT_DIR" --host "$WEB_HOST" --port "$LAUNCH_PORT" )
+if [[ -n "$WEB_PASSWORD" ]]; then
+  LAUNCH_CMD+=( --password "$WEB_PASSWORD" )
+fi
+nohup env PYTHONPATH="$PYTHONPATH" AGENT_RUNNER_WEB_PASSWORD="$WEB_PASSWORD" "${LAUNCH_CMD[@]}" >>"$LOG_FILE" 2>&1 &
 APP_PID="$!"
 
 # Only close the originating terminal once the expected runtime is confirmed.
 for _ in $(seq 1 50); do
-  if server_matches_expected; then
+  if server_matches_expected "$APP_URL"; then
+    write_current_url "$APP_URL"
     open "$OPEN_URL"
     close_origin_terminal_session
     exit 0
   fi
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    echo "Failed to start Alcove web runtime. See ${LOG_FILE} for details." >&2
+    echo "Failed to start Alcove web runtime on ${APP_URL}. Keep Alcove on its configured port or set AGENT_RUNNER_WEB_PORT intentionally. See ${LOG_FILE} for details." >&2
     exit 1
   fi
   sleep 0.1
