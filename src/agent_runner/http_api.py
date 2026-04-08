@@ -11,7 +11,7 @@ from email.policy import default as email_policy_default
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 import qrcode
@@ -29,6 +29,13 @@ from .web_ui import (
     render_workspaces,
 )
 
+MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+MAX_MULTIPART_BODY_BYTES = 45 * 1024 * 1024
+
+
+class RequestBodyTooLargeError(ValueError):
+    pass
+
 
 def create_server(
     service: AgentRunnerService,
@@ -36,10 +43,11 @@ def create_server(
     port: int,
     *,
     access_password: str | None = None,
+    native_transcriber: Callable[[str | None], dict[str, Any]] | None = None,
 ) -> ThreadingHTTPServer:
     password = (access_password or "").strip() or None
 
-    def connections_payload(server_port: int) -> dict[str, Any]:
+    def connections_payload(server_port: int, *, loopback_client: bool) -> dict[str, Any]:
         payload = server_info(
             host,
             server_port,
@@ -55,6 +63,10 @@ def create_server(
             "Available on Tailscale."
             if phone_url
             else "Tailscale phone access is not available right now."
+        )
+        payload["native_transcription_available"] = native_transcriber is not None and loopback_client
+        payload["native_transcription_provider"] = (
+            "macos-wrapper" if native_transcriber is not None and loopback_client else None
         )
         return payload
 
@@ -102,7 +114,14 @@ def create_server(
                     return
                 if path.startswith("/api/workspaces/") and path.endswith("/conversations"):
                     workspace_id = _path_part(path, 2)
-                    self._json_response({"conversations": service.list_conversations(workspace_id)})
+                    self._json_response(
+                        {
+                            "conversations": service.list_conversations(
+                                workspace_id,
+                                include_archived=_query_bool(query, "include_archived"),
+                            )
+                        }
+                    )
                     return
                 if path.startswith("/api/workspaces/"):
                     workspace_id = _path_part(path, 2)
@@ -152,13 +171,26 @@ def create_server(
                     )
                     return
                 if path == "/api/server-info":
-                    self._json_response(connections_payload(self.server.server_port))
+                    self._json_response(
+                        connections_payload(
+                            self.server.server_port,
+                            loopback_client=self._is_loopback_client(),
+                        )
+                    )
                     return
                 if path == "/api/connections":
-                    self._json_response(connections_payload(self.server.server_port))
+                    self._json_response(
+                        connections_payload(
+                            self.server.server_port,
+                            loopback_client=self._is_loopback_client(),
+                        )
+                    )
                     return
                 if path == "/api/connections/phone-qr.svg":
-                    payload = connections_payload(self.server.server_port)
+                    payload = connections_payload(
+                        self.server.server_port,
+                        loopback_client=self._is_loopback_client(),
+                    )
                     phone_url = str(payload.get("phone_url") or "").strip()
                     if not phone_url:
                         self._error_response(HTTPStatus.CONFLICT, "Phone access is not available.")
@@ -251,7 +283,7 @@ def create_server(
                     self._json_response(
                         service.create_studio_game(
                             game_title=_required_body_text(body, "game_title"),
-                            template_kind=_body_text(body, "template_kind") or "blank",
+                            template_kind=_body_text(body, "template_kind") or "",
                             theme_prompt=_body_text(body, "theme_prompt"),
                         ),
                         status=HTTPStatus.CREATED,
@@ -321,6 +353,26 @@ def create_server(
                         )
                     )
                     return
+                if path.startswith("/api/conversations/") and path.endswith("/archive"):
+                    conversation_id = _path_part(path, 2)
+                    body = self._json_body()
+                    self._json_response(
+                        service.archive_conversation(
+                            conversation_id,
+                            workspace_id=_body_text(body, "workspace_id"),
+                        )
+                    )
+                    return
+                if path.startswith("/api/conversations/") and path.endswith("/restore"):
+                    conversation_id = _path_part(path, 2)
+                    body = self._json_body()
+                    self._json_response(
+                        service.restore_conversation(
+                            conversation_id,
+                            workspace_id=_body_text(body, "workspace_id"),
+                        )
+                    )
+                    return
                 if path.startswith("/api/workspaces/") and path.endswith("/runs"):
                     body = self._json_body()
                     workspace_id = _path_part(path, 2)
@@ -347,6 +399,16 @@ def create_server(
                     workspace_id = _path_part(path, 2)
                     self._json_response(service.publish_studio_game(workspace_id))
                     return
+                if path == "/api/native/transcribe":
+                    if not self._is_loopback_client():
+                        self._error_response(HTTPStatus.FORBIDDEN, "Native transcription is only available from this machine.")
+                        return
+                    if native_transcriber is None:
+                        self._error_response(HTTPStatus.CONFLICT, "Native transcription is not available in this build.")
+                        return
+                    body = self._json_body()
+                    self._json_response(native_transcriber(_body_text(body, "locale")))
+                    return
                 if path == "/api/runs/stop-safely":
                     self._json_response(service.stop_run())
                     return
@@ -359,6 +421,8 @@ def create_server(
                 self._error_response(HTTPStatus.NOT_FOUND, "Not found")
             except KeyError:
                 self._error_response(HTTPStatus.NOT_FOUND, "Conversation not found")
+            except RequestBodyTooLargeError as exc:
+                self._error_response(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
             except ValueError as exc:
                 self._error_response(HTTPStatus.BAD_REQUEST, str(exc))
             except RuntimeError as exc:
@@ -371,10 +435,19 @@ def create_server(
             path = parsed.path
             if not self._authorized(path):
                 return
-            body = self._json_body()
             try:
+                body = self._json_body()
                 if path == "/api/settings":
                     self._json_response(service.update_settings(body))
+                    return
+                if path.startswith("/api/workspaces/"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(
+                        service.rename_workspace(
+                            workspace_id,
+                            display_name=_required_body_text(body, "display_name"),
+                        )
+                    )
                     return
                 if path.startswith("/api/conversations/"):
                     if path.endswith("/context"):
@@ -400,6 +473,8 @@ def create_server(
                 self._error_response(HTTPStatus.NOT_FOUND, "Not found")
             except KeyError:
                 self._error_response(HTTPStatus.NOT_FOUND, "Conversation not found")
+            except RequestBodyTooLargeError as exc:
+                self._error_response(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
             except ValueError as exc:
                 self._error_response(HTTPStatus.BAD_REQUEST, str(exc))
             except Exception as exc:
@@ -412,6 +487,10 @@ def create_server(
             if not self._authorized(path):
                 return
             try:
+                if path.startswith("/api/workspaces/"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(service.delete_workspace(workspace_id))
+                    return
                 if path.startswith("/api/conversations/"):
                     conversation_id = _path_part(path, 2)
                     self._json_response(
@@ -528,7 +607,11 @@ def create_server(
             if not uploads:
                 return []
 
-            uploads_dir = service.config.repo_path / ".agent-runner" / "uploads" / workspace_id / conversation_id
+            safe_workspace_id = _safe_storage_segment(workspace_id, label="Workspace id")
+            safe_conversation_id = _safe_storage_segment(conversation_id, label="Conversation id")
+            uploads_dir = (
+                service.config.repo_path / ".agent-runner" / "uploads" / safe_workspace_id / safe_conversation_id
+            )
             uploads_dir.mkdir(parents=True, exist_ok=True)
             max_files = 4
             max_bytes = 10 * 1024 * 1024
@@ -557,9 +640,15 @@ def create_server(
             return lines
 
         def _raw_body(self) -> bytes:
-            length = int(self.headers.get("Content-Length", "0") or "0")
+            length_header = (self.headers.get("Content-Length") or "0").strip()
+            try:
+                length = int(length_header or "0")
+            except ValueError as exc:
+                raise ValueError("Invalid Content-Length header.") from exc
             if length <= 0:
                 return b""
+            if length > _request_body_limit(self.headers.get("Content-Type", "")):
+                raise RequestBodyTooLargeError("Request body is too large.")
             return self.rfile.read(length)
 
         def _json_response(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -700,6 +789,13 @@ def _query_int(query: dict[str, list[str]], key: str, *, default: int) -> int:
     return value
 
 
+def _query_bool(query: dict[str, list[str]], key: str) -> bool:
+    text = _query_text(query, key)
+    if not text:
+        return False
+    return text.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _body_text(body: dict[str, Any], key: str) -> str | None:
     value = body.get(key)
     if isinstance(value, str):
@@ -757,3 +853,23 @@ def _image_suffix_from_mime(mime: str) -> str:
 def _qr_svg(text: str) -> str:
     image = qrcode.make(text, image_factory=qrcode.image.svg.SvgImage)
     return image.to_string(encoding="unicode")
+
+
+def _request_body_limit(content_type: str) -> int:
+    normalized = str(content_type or "").strip().lower()
+    if normalized.startswith("multipart/form-data"):
+        return MAX_MULTIPART_BODY_BYTES
+    return MAX_JSON_BODY_BYTES
+
+
+def _safe_storage_segment(value: object, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty.")
+    if text in {".", ".."}:
+        raise ValueError(f"{label} cannot be '.' or '..'.")
+    if any(ch in text for ch in ("/", "\\", "\x00")):
+        raise ValueError(f"{label} cannot contain path separators.")
+    if any(ord(ch) < 32 for ch in text):
+        raise ValueError(f"{label} cannot contain control characters.")
+    return text

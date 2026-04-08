@@ -16,10 +16,11 @@ STUDIO_KIND_LABELS = {
 
 STUDIO_TEMPLATES = {
     "studio_game": {
-        "blank": "Blank Start",
+        "runner": "Runner",
         "platformer": "Platformer",
         "top-down": "Top-down Adventure",
         "clicker": "Clicker",
+        "blank": "Blank Start",
     },
     "studio_web": {
         "landing-page": "Landing Page",
@@ -42,7 +43,7 @@ STUDIO_TEMPLATES = {
 }
 
 DEFAULT_TEMPLATES = {
-    "studio_game": "platformer",
+    "studio_game": "runner",
     "studio_web": "landing-page",
     "studio_data": "dashboard",
     "studio_docs": "docs-site",
@@ -136,6 +137,8 @@ def normalize_template_kind(workspace_kind: str, value: str | None) -> str:
     text = (value or "").strip().lower()
     if kind == "studio_game" and text in {"topdown", "top_down"}:
         text = "top-down"
+    if kind == "studio_game" and text in {"side-scroller", "sidescroller"}:
+        text = "runner"
     return text if text in STUDIO_TEMPLATES[kind] else DEFAULT_TEMPLATES[kind]
 
 
@@ -250,12 +253,14 @@ def _style_css(workspace_kind: str) -> str:
     kind = normalize_workspace_kind(workspace_kind)
     background = {
         "studio_game": "radial-gradient(circle at top, #1f3f35, #10201a 60%, #08110e)",
-        "studio_web": "linear-gradient(135deg, #f6efe0 0%, #f7f3ea 45%, #d7e5df 100%)",
+        "studio_web": "linear-gradient(180deg, #f1ece4 0%, #f6f4ef 48%, #dfe6dc 100%)",
         "studio_data": "linear-gradient(180deg, #f4f7fb 0%, #ecf1f7 52%, #dfe8f3 100%)",
         "studio_docs": "linear-gradient(180deg, #f7f1e7 0%, #f6f3ee 42%, #e6ecf4 100%)",
     }[kind]
-    body_color = "#f6f4e8" if kind == "studio_game" else "#17212b"
-    shell_background = "rgba(8, 17, 14, 0.24)" if kind == "studio_game" else "rgba(255, 255, 255, 0.78)"
+    body_color = "#f6f4e8" if kind == "studio_game" else "#1c241f"
+    shell_background = "rgba(8, 17, 14, 0.24)" if kind == "studio_game" else "rgba(252, 250, 246, 0.82)"
+    surface_radius = "22px" if kind == "studio_game" else "10px"
+    surface_shadow = "0 26px 60px rgba(0, 0, 0, 0.12)" if kind == "studio_game" else "0 18px 44px rgba(34, 41, 35, 0.08)"
     return f"""html, body {{
   margin: 0;
   min-height: 100%;
@@ -297,12 +302,12 @@ body {{
 
 .studio-tag {{
   border: 1px solid rgba(127, 143, 159, 0.34);
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 6px 10px;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.44);
 }}
 
 .studio-main {{
@@ -311,10 +316,10 @@ body {{
 
 .studio-surface {{
   min-height: min(78vh, 880px);
-  border-radius: 24px;
+  border-radius: {surface_radius};
   background: {shell_background};
   border: 1px solid rgba(110, 126, 144, 0.18);
-  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.12);
+  box-shadow: {surface_shadow};
   overflow: hidden;
 }}
 
@@ -328,9 +333,12 @@ body {{
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.62);
   border: 1px solid rgba(110, 126, 144, 0.18);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
 }}
 
 .stack {{
@@ -341,8 +349,247 @@ body {{
 .card {{
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(110, 126, 144, 0.14);
-  border-radius: 18px;
+  border-radius: 10px;
   padding: 18px;
+}}
+
+.web-canvas {{
+  position: relative;
+  min-height: min(78vh, 880px);
+  padding: clamp(24px, 4vw, 46px);
+  display: grid;
+  gap: clamp(28px, 4vw, 42px);
+  background:
+    radial-gradient(circle at top right, rgba(63, 100, 75, 0.14), transparent 34%),
+    radial-gradient(circle at 12% 18%, rgba(166, 106, 63, 0.09), transparent 24%),
+    linear-gradient(180deg, rgba(252, 250, 246, 0.94), rgba(245, 243, 238, 0.88));
+  isolation: isolate;
+}}
+
+.web-canvas::after {{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(141, 146, 137, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 146, 137, 0.06) 1px, transparent 1px);
+  background-size: 100% 120px, 120px 100%;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.36), transparent 86%);
+  pointer-events: none;
+  z-index: -1;
+}}
+
+.web-topline,
+.web-hero,
+.web-section,
+.web-launch {{
+  position: relative;
+  z-index: 1;
+}}
+
+.web-topline {{
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(98, 108, 101, 0.18);
+}}
+
+.web-kicker,
+.web-overline,
+.web-aside-label {{
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(61, 70, 63, 0.72);
+}}
+
+.web-wordmark {{
+  font-size: clamp(20px, 3vw, 28px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}}
+
+.web-nav {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}}
+
+.web-nav a {{
+  color: inherit;
+  text-decoration: none;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(61, 70, 63, 0.74);
+}}
+
+.web-hero {{
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: clamp(24px, 4vw, 44px);
+  align-items: start;
+}}
+
+.web-title {{
+  margin: 0;
+  max-width: 10ch;
+  font-size: clamp(56px, 9vw, 104px);
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+}}
+
+.web-copy {{
+  max-width: 34rem;
+  margin: 18px 0 0;
+  font-size: clamp(18px, 2vw, 21px);
+  line-height: 1.62;
+  color: rgba(36, 45, 39, 0.82);
+}}
+
+.web-cta-row {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}}
+
+.web-button {{
+  appearance: none;
+  border: 1px solid rgba(34, 46, 38, 0.12);
+  border-radius: 6px;
+  padding: 14px 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #f7f7f2;
+  background: #314b3b;
+}}
+
+.web-button.secondary {{
+  color: #243028;
+  background: rgba(255, 255, 255, 0.44);
+}}
+
+.web-aside {{
+  padding-top: 8px;
+  border-left: 1px solid rgba(98, 108, 101, 0.18);
+  padding-left: clamp(18px, 2vw, 28px);
+}}
+
+.web-note-list {{
+  display: grid;
+}}
+
+.web-note {{
+  display: grid;
+  gap: 6px;
+  padding: 16px 0;
+  border-top: 1px solid rgba(98, 108, 101, 0.14);
+}}
+
+.web-note:first-child {{
+  padding-top: 0;
+  border-top: 0;
+}}
+
+.web-note span,
+.web-rail-row span {{
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(61, 70, 63, 0.66);
+}}
+
+.web-note strong,
+.web-rail-row strong {{
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+}}
+
+.web-proof {{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid rgba(98, 108, 101, 0.18);
+  border-bottom: 1px solid rgba(98, 108, 101, 0.18);
+}}
+
+.web-proof-item {{
+  padding: 22px 18px 20px 0;
+}}
+
+.web-proof-item + .web-proof-item {{
+  padding-left: 18px;
+  border-left: 1px solid rgba(98, 108, 101, 0.14);
+}}
+
+.web-proof-number {{
+  display: block;
+  margin-bottom: 18px;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(61, 70, 63, 0.68);
+}}
+
+.web-proof-item h2,
+.web-section-head h2,
+.web-launch-copy h2 {{
+  margin: 0;
+  font-size: clamp(26px, 3vw, 38px);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}}
+
+.web-proof-item p,
+.web-feature p,
+.web-launch-copy p {{
+  margin: 12px 0 0;
+  font-size: 16px;
+  line-height: 1.62;
+  color: rgba(36, 45, 39, 0.8);
+}}
+
+.web-section {{
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr);
+  gap: clamp(24px, 4vw, 42px);
+  padding-top: 8px;
+}}
+
+.web-feature-list,
+.web-launch-rail {{
+  display: grid;
+}}
+
+.web-feature,
+.web-rail-row {{
+  padding: 16px 0 18px;
+  border-top: 1px solid rgba(98, 108, 101, 0.14);
+}}
+
+.web-feature:last-child,
+.web-rail-row:last-child {{
+  border-bottom: 1px solid rgba(98, 108, 101, 0.14);
+}}
+
+.web-feature h3 {{
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}}
+
+.web-launch {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+  gap: clamp(24px, 4vw, 42px);
+  align-items: start;
 }}
 
 table {{
@@ -368,6 +615,36 @@ th, td {{
 
   .studio-main {{
     padding-inline: 14px;
+  }}
+
+  .web-topline,
+  .web-hero,
+  .web-section,
+  .web-launch,
+  .web-proof {{
+    grid-template-columns: 1fr;
+  }}
+
+  .web-nav {{
+    gap: 12px;
+  }}
+
+  .web-aside {{
+    border-left: 0;
+    border-top: 1px solid rgba(98, 108, 101, 0.18);
+    padding-left: 0;
+    padding-top: 18px;
+  }}
+
+  .web-proof-item,
+  .web-proof-item + .web-proof-item {{
+    padding-inline: 0;
+    border-left: 0;
+    border-top: 1px solid rgba(98, 108, 101, 0.14);
+  }}
+
+  .web-proof-item:first-child {{
+    border-top: 0;
   }}
 }}
 """
@@ -431,9 +708,16 @@ def _entry_script(spec: dict[str, object]) -> str:
 
 def _template_game_js(title: str, kind: str, theme_prompt: str | None) -> str:
     title_text = _js_text(title)
-    theme_text = _js_text(theme_prompt or "Bright, playful, and easy to understand.")
+    theme_default = (
+        "A moonlit city runner where a detective leaps over street hazards and gathers clues."
+        if kind == "runner"
+        else "Bright, playful, and easy to understand."
+    )
+    theme_text = _js_text(theme_prompt or theme_default)
+    score_label = "Clues" if kind == "runner" else "Stars"
     common = f"""const GAME_TITLE = "{title_text}";
 const GAME_THEME = "{theme_text}";
+const SCORE_LABEL = "{score_label}";
 const statusEl = document.getElementById("status");
 const width = 960;
 const height = 540;
@@ -464,13 +748,27 @@ function preload() {{
   g.fillRoundedRect(0, 0, 36, 36, 12);
   g.generateTexture("hero", 36, 36);
   g.clear();
+  g.fillStyle(0x5f7695, 1);
+  g.fillRoundedRect(0, 0, 34, 42, 10);
+  g.generateTexture("detective", 34, 42);
+  g.clear();
   g.fillStyle(0xf6d66f, 1);
   g.fillCircle(14, 14, 14);
   g.generateTexture("coin", 28, 28);
   g.clear();
+  g.fillStyle(0xf4c86b, 1);
+  g.fillCircle(18, 18, 18);
+  g.fillStyle(0x213749, 1);
+  g.fillRect(22, 24, 16, 6);
+  g.generateTexture("clue", 42, 42);
+  g.clear();
   g.fillStyle(0x7bc8f6, 1);
   g.fillRoundedRect(0, 0, 120, 28, 10);
   g.generateTexture("platform", 120, 28);
+  g.clear();
+  g.fillStyle(0xc9704c, 1);
+  g.fillRoundedRect(0, 0, 42, 56, 8);
+  g.generateTexture("obstacle", 42, 56);
   g.destroy();
 }}
 
@@ -482,8 +780,8 @@ function paintSky(scene) {{
 
 function addScore(scene, amount) {{
   score += amount;
-  if (scoreText) scoreText.setText(`Stars: ${{score}}`);
-  if (statusEl) statusEl.textContent = score > 0 ? `Ready to Play · Stars: ${{score}}` : "Ready to Play";
+  if (scoreText) scoreText.setText(`${{SCORE_LABEL}}: ${{score}}`);
+  if (statusEl) statusEl.textContent = score > 0 ? `Ready to Play · ${{SCORE_LABEL}}: ${{score}}` : "Ready to Play";
 }}
 
 function createLabel(scene, text, x, y, size = "28px") {{
@@ -493,6 +791,116 @@ function createLabel(scene, text, x, y, size = "28px") {{
     color: "#f6f4e8",
   }});
 }}
+"""
+    if kind == "runner":
+        return common + """
+let hazards;
+let clues;
+let jumpKey;
+let gameOver = false;
+const runnerSpeed = 280;
+
+function paintRunnerCity(scene) {
+  scene.add.rectangle(width / 2, height / 2, width, height, 0x9dc1e6).setDepth(-8);
+  scene.add.rectangle(width / 2, height * 0.72, width, height * 0.34, 0x7ea5cf).setDepth(-7);
+  scene.add.circle(790, 102, 48, 0xf7e18c, 0.9).setDepth(-7);
+  const skyline = [
+    [50, 390, 96, 170],
+    [164, 410, 118, 150],
+    [304, 380, 92, 180],
+    [418, 404, 110, 156],
+    [564, 372, 126, 188],
+    [714, 398, 102, 162],
+    [838, 384, 118, 176],
+  ];
+  skyline.forEach(([x, y, w, h]) => {
+    scene.add.rectangle(x, y, w, h, 0x243246).setOrigin(0, 0).setDepth(-6);
+    for (let row = 0; row < 4; row += 1) {
+      for (let col = 0; col < 3; col += 1) {
+        scene.add.rectangle(x + 18 + col * 22, y + 24 + row * 28, 8, 12, 0xf2d87c, 0.55).setDepth(-5);
+      }
+    }
+  });
+  scene.add.rectangle(width / 2, height - 84, width, 122, 0x6f6351).setDepth(-4);
+  scene.add.rectangle(width / 2, height - 62, width, 14, 0xd9c59a).setDepth(-3);
+  scene.add.rectangle(width / 2, height - 16, width, 18, 0x564a38).setDepth(-2);
+}
+
+function resetRunner(scene) {
+  score = 0;
+  gameOver = false;
+  hazards.clear(true, true);
+  clues.clear(true, true);
+  player.setPosition(150, height - 104);
+  player.setVelocity(0, 0);
+  if (scoreText) scoreText.setText(`${SCORE_LABEL}: 0`);
+  if (statusEl) statusEl.textContent = "Ready to Play";
+}
+
+function spawnRunnerBeat(scene) {
+  if (gameOver) return;
+  const obstacle = hazards.create(width + Phaser.Math.Between(40, 150), height - 90, "obstacle");
+  obstacle.body.setAllowGravity(false);
+  obstacle.setVelocityX(-runnerSpeed);
+  if (Phaser.Math.Between(0, 100) > 18) {
+    const clue = clues.create(width + Phaser.Math.Between(140, 230), Phaser.Math.Between(height - 210, height - 160), "clue");
+    clue.body.setAllowGravity(false);
+    clue.setVelocityX(-runnerSpeed);
+  }
+}
+
+function create() {
+  paintRunnerCity(this);
+  const ground = this.physics.add.staticGroup();
+  ground.create(width / 2, height - 24, "platform").setScale(10, 1.3).refreshBody();
+  createLabel(this, GAME_TITLE, 30, 28);
+  createLabel(this, GAME_THEME, 30, 68, "18px").setAlpha(0.82);
+  scoreText = createLabel(this, `${SCORE_LABEL}: 0`, 30, 108, "22px");
+  this.add.text(30, 145, "Up or space to jump. Collect clues and dodge the street hazards.", {
+    fontFamily: "Avenir Next, Trebuchet MS, sans-serif",
+    fontSize: "20px",
+    color: "#f6f4e8",
+  });
+  player = this.physics.add.image(150, height - 104, "detective").setScale(1.2);
+  player.setCollideWorldBounds(true);
+  player.setBounce(0);
+  this.physics.add.collider(player, ground);
+  hazards = this.physics.add.group({ allowGravity: false, immovable: true });
+  clues = this.physics.add.group({ allowGravity: false, immovable: true });
+  this.physics.add.overlap(player, clues, (_, clue) => {
+    clue.destroy();
+    addScore(this, 1);
+  });
+  this.physics.add.overlap(player, hazards, () => {
+    if (gameOver) return;
+    gameOver = true;
+    if (statusEl) statusEl.textContent = "Case Interrupted";
+    this.cameras.main.flash(160, 255, 244, 228);
+    this.time.delayedCall(700, () => resetRunner(this));
+  });
+  cursors = this.input.keyboard.createCursorKeys();
+  jumpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+  this.time.addEvent({
+    delay: 980,
+    loop: true,
+    callback: () => spawnRunnerBeat(this),
+  });
+  if (statusEl) statusEl.textContent = "Ready to Play";
+}
+
+function update() {
+  if (!player || !cursors) return;
+  const grounded = Boolean(player.body?.blocked?.down || player.body?.touching?.down);
+  if (!gameOver && grounded && (Phaser.Input.Keyboard.JustDown(cursors.up) || Phaser.Input.Keyboard.JustDown(jumpKey))) {
+    player.setVelocityY(-560);
+  }
+  for (const item of hazards.getChildren()) {
+    if (item.x < -80) item.destroy();
+  }
+  for (const item of clues.getChildren()) {
+    if (item.x < -80) item.destroy();
+  }
+}
 """
     if kind == "clicker":
         return common + """
@@ -614,23 +1022,121 @@ function update() {
 def _template_web_js(title: str, kind: str, theme_prompt: str | None) -> str:
     title_text = _js_text(title)
     theme_text = _js_text(theme_prompt or "Clean, inviting, and surprisingly polished.")
+    if kind == "landing-page":
+        return f"""const TITLE = "{title_text}";
+const THEME = "{theme_text}";
+const root = document.getElementById("studio-root");
+const statusEl = document.getElementById("status");
+
+root.innerHTML = `
+  <div class="web-canvas">
+    <section class="web-topline">
+      <div>
+        <div class="web-kicker">Web Studio</div>
+        <div class="web-wordmark">Landing Page Template</div>
+      </div>
+      <nav class="web-nav" aria-label="Landing page sections">
+        <a href="#story">Story</a>
+        <a href="#proof">Proof</a>
+        <a href="#launch">Launch</a>
+      </nav>
+    </section>
+
+    <section id="story" class="web-hero">
+      <div>
+        <p class="web-overline">Quiet launch template</p>
+        <h1 class="web-title">${{TITLE}}</h1>
+        <p class="web-copy">${{THEME}}</p>
+        <div class="web-cta-row">
+          <button class="web-button" type="button">Start Project</button>
+          <button class="web-button secondary" type="button">See Preview</button>
+        </div>
+      </div>
+      <aside class="web-aside" aria-label="Launch notes">
+        <div class="web-aside-label">Launch Notes</div>
+        <div class="web-note-list">
+          <div class="web-note">
+            <span>Posture</span>
+            <strong>Minimal, composed, and product-first.</strong>
+          </div>
+          <div class="web-note">
+            <span>Structure</span>
+            <strong>One continuous canvas shaped by spacing and hairline dividers.</strong>
+          </div>
+          <div class="web-note">
+            <span>Signal</span>
+            <strong>Professional enough for a premium launch without feeling overdesigned.</strong>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section id="proof" class="web-proof">
+      <article class="web-proof-item">
+        <span class="web-proof-number">01</span>
+        <h2>Lead with a clear promise.</h2>
+        <p>Put the offer up front so the visitor understands the product before they scan the details.</p>
+      </article>
+      <article class="web-proof-item">
+        <span class="web-proof-number">02</span>
+        <h2>Let typography carry the page.</h2>
+        <p>Big signals come from type, rhythm, and alignment instead of decorative tiles and nested panels.</p>
+      </article>
+      <article class="web-proof-item">
+        <span class="web-proof-number">03</span>
+        <h2>Make the preview feel publishable.</h2>
+        <p>Every section is built to read like a polished first draft, not a placeholder wireframe.</p>
+      </article>
+    </section>
+
+    <section class="web-section">
+      <div class="web-section-head">
+        <div class="web-kicker">Framework</div>
+        <h2>Sleek enough for a launch, restrained enough for a real product.</h2>
+      </div>
+      <div class="web-feature-list">
+        <article class="web-feature">
+          <h3>Typography-first hierarchy</h3>
+          <p>Scale, weight, and spacing organize the page before borders or backgrounds need to step in.</p>
+        </article>
+        <article class="web-feature">
+          <h3>Quiet visual confidence</h3>
+          <p>Soft earthy color and disciplined whitespace make the page feel mature, calm, and ready to trust.</p>
+        </article>
+        <article class="web-feature">
+          <h3>Clean publishing rhythm</h3>
+          <p>Ship a solid narrative, refine the copy, and move straight from preview to publish without reworking the structure.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="launch" class="web-launch">
+      <div class="web-launch-copy">
+        <div class="web-kicker">Launch Flow</div>
+        <h2>Preview fast, sharpen the story, publish when the page feels inevitable.</h2>
+        <p>The template gives you a high-trust baseline so the next iterations can focus on message, proof, and product texture.</p>
+      </div>
+      <div class="web-launch-rail">
+        <div class="web-rail-row">
+          <span>Step 1</span>
+          <strong>Frame the product in one sentence.</strong>
+        </div>
+        <div class="web-rail-row">
+          <span>Step 2</span>
+          <strong>Add just enough proof to feel credible.</strong>
+        </div>
+        <div class="web-rail-row">
+          <span>Step 3</span>
+          <strong>Polish the details, then publish.</strong>
+        </div>
+      </div>
+    </section>
+  </div>
+`;
+
+if (statusEl) statusEl.textContent = "Ready to Preview";
+"""
     layout = {
-        "landing-page": """
-          <section class="card" style="padding:32px;">
-            <div class="hero-chip">Launch-ready landing page</div>
-            <h1 style="font-size:56px;line-height:1;max-width:10ch;margin:18px 0 12px;">${TITLE}</h1>
-            <p style="max-width:58ch;font-size:19px;line-height:1.55;">${THEME}</p>
-            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:22px;">
-              <button style="padding:14px 18px;border:none;border-radius:14px;background:#183b2f;color:#fff;font-size:16px;">Get Started</button>
-              <button style="padding:14px 18px;border:1px solid rgba(24,59,47,0.18);border-radius:14px;background:#fff;font-size:16px;">See Demo</button>
-            </div>
-          </section>
-          <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
-            <article class="card"><h3>Fast setup</h3><p>Ship a confident first draft in minutes.</p></article>
-            <article class="card"><h3>Clear story</h3><p>Keep the product promise visible in the UI.</p></article>
-            <article class="card"><h3>Ready to share</h3><p>Publish a polished preview without extra tools.</p></article>
-          </section>
-        """,
         "portfolio": """
           <section class="card" style="display:grid;grid-template-columns:1.3fr 1fr;gap:20px;padding:28px;">
             <div>

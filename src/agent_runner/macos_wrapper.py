@@ -20,6 +20,7 @@ from typing import Any, Callable, Sequence
 RUN_ACTIVE_STATES = frozenset({"starting", "running", "stopping"})
 KEYCHAIN_ACCOUNT = "access-password"
 QUICK_ACTION_NAME = "Open in Alcove"
+NATIVE_SPEECH_HELPER_NAME = "AlcoveNativeSpeech"
 
 
 def is_macos() -> bool:
@@ -38,6 +39,89 @@ def app_bundle_path(executable_path: Path | None = None) -> Path | None:
     if contents_index == 0:
         return None
     return Path(*parts[:contents_index]).resolve()
+
+
+def native_speech_helper_path(
+    *,
+    app_bundle: Path | None = None,
+    executable_path: Path | None = None,
+) -> Path | None:
+    explicit = os.environ.get("AGENT_RUNNER_NATIVE_SPEECH_HELPER", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    bundle = app_bundle or app_bundle_path(executable_path)
+    if bundle is None:
+        return None
+    return (bundle / "Contents" / "MacOS" / NATIVE_SPEECH_HELPER_NAME).resolve()
+
+
+def native_speech_available(
+    *,
+    app_bundle: Path | None = None,
+    executable_path: Path | None = None,
+) -> bool:
+    helper = native_speech_helper_path(app_bundle=app_bundle, executable_path=executable_path)
+    return helper is not None and helper.exists() and os.access(helper, os.X_OK)
+
+
+def capture_native_speech(
+    *,
+    app_bundle: Path | None = None,
+    executable_path: Path | None = None,
+    locale: str | None = None,
+    timeout: float = 45.0,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    helper = native_speech_helper_path(app_bundle=app_bundle, executable_path=executable_path)
+    if helper is None or not helper.exists() or not os.access(helper, os.X_OK):
+        raise RuntimeError("Native transcription is not available in this build.")
+
+    args = [str(helper)]
+    locale_text = str(locale or "").strip()
+    if locale_text:
+        args.extend(["--locale", locale_text])
+
+    run = runner or subprocess.run
+    try:
+        completed = run(
+            args,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Native transcription timed out.") from exc
+
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    payload: dict[str, Any] | None = None
+    if stdout:
+        try:
+            decoded = json.loads(stdout)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            payload = decoded
+
+    if completed.returncode != 0:
+        detail = ""
+        if payload is not None:
+            detail = str(payload.get("detail") or payload.get("error") or "").strip()
+        raise RuntimeError(detail or stderr or stdout or "Native transcription failed.")
+
+    if payload is None:
+        raise RuntimeError("Native transcription returned an invalid response.")
+
+    transcript = str(payload.get("transcript") or "").strip()
+    if not transcript:
+        detail = str(payload.get("detail") or "").strip()
+        raise RuntimeError(detail or "Could not capture speech.")
+
+    response = dict(payload)
+    response["transcript"] = transcript
+    response.setdefault("provider", "macos-native")
+    return response
 
 
 def wrapper_state_path(state_root: Path) -> Path:

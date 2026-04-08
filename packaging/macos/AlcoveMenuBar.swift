@@ -1,20 +1,113 @@
 import AppKit
 import Foundation
 
+final class FolderDropView: NSView {
+    weak var button: NSStatusBarButton?
+    var onFolderDropped: ((String) -> Void)?
+    private var isDropTarget = false {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.fileURL])
+        wantsLayer = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        button?.performClick(nil)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard folderPath(from: sender.draggingPasteboard) != nil else {
+            isDropTarget = false
+            return []
+        }
+        isDropTarget = true
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isDropTarget = false
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        isDropTarget = false
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        folderPath(from: sender.draggingPasteboard) != nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer {
+            isDropTarget = false
+        }
+        guard let folderPath = folderPath(from: sender.draggingPasteboard) else {
+            return false
+        }
+        onFolderDropped?(folderPath)
+        return true
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        isDropTarget = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isDropTarget else { return }
+        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 6, yRadius: 6).fill()
+    }
+
+    private func folderPath(from pasteboard: NSPasteboard) -> String? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+        ]
+        guard
+            let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]
+        else {
+            return nil
+        }
+        for url in urls {
+            if let values = try? url.resourceValues(forKeys: [.isDirectoryKey]), values.isDirectory == true {
+                return url.path
+            }
+            var isDirectory = ObjCBool(false)
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return url.path
+            }
+        }
+        return nil
+    }
+}
+
 final class MenuBarController: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let statePath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/agent-runner/wrapper-runtime.json")
     private var timer: Timer?
+    private let statusLineView = NSTextField(labelWithString: "Loading Alcove...")
+    private let statusLineContainer = NSView(frame: NSRect(x: 0, y: 0, width: 290, height: 24))
 
     private let statusLine = NSMenuItem(title: "Loading Alcove…", action: nil, keyEquivalent: "")
     private let openItem = NSMenuItem(title: "Open Alcove", action: #selector(openAlcove), keyEquivalent: "")
-    private let openWorkspaceItem = NSMenuItem(title: "Open Current Workspace", action: #selector(openCurrentWorkspace), keyEquivalent: "")
+    private let openWorkspaceItem = NSMenuItem(title: "Open Workspace Folder", action: #selector(openCurrentWorkspace), keyEquivalent: "")
     private let stopItem = NSMenuItem(title: "Stop Run", action: #selector(stopRun), keyEquivalent: "")
     private let copyLocalItem = NSMenuItem(title: "Copy Local URL", action: #selector(copyLocalURL), keyEquivalent: "")
     private let copyPhoneItem = NSMenuItem(title: "Copy Phone URL", action: #selector(copyPhoneURL), keyEquivalent: "")
     private let restartItem = NSMenuItem(title: "Restart Service", action: #selector(restartService), keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit Menu Bar", action: #selector(quitHelper), keyEquivalent: "")
+    private let dropTargetView = FolderDropView(frame: .zero)
 
     private var state = WrapperState.empty
 
@@ -33,7 +126,8 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     private func configureMenu() {
         let menu = NSMenu()
-        statusLine.isEnabled = false
+        configureStatusLineView()
+        statusLine.view = statusLineContainer
         menu.addItem(statusLine)
         menu.addItem(.separator())
         menu.addItem(openItem)
@@ -52,7 +146,19 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         }
 
         statusItem.menu = menu
+        configureDropTarget()
         updateMenu()
+    }
+
+    private func configureStatusLineView() {
+        statusLineView.translatesAutoresizingMaskIntoConstraints = false
+        statusLineView.lineBreakMode = .byTruncatingTail
+        statusLineContainer.addSubview(statusLineView)
+        NSLayoutConstraint.activate([
+            statusLineView.leadingAnchor.constraint(equalTo: statusLineContainer.leadingAnchor, constant: 10),
+            statusLineView.trailingAnchor.constraint(equalTo: statusLineContainer.trailingAnchor, constant: -10),
+            statusLineView.centerYAnchor.constraint(equalTo: statusLineContainer.centerYAnchor),
+        ])
     }
 
     private func refreshState() {
@@ -60,15 +166,37 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         updateMenu()
     }
 
+    private func configureDropTarget() {
+        guard let button = statusItem.button, dropTargetView.superview == nil else { return }
+        dropTargetView.translatesAutoresizingMaskIntoConstraints = false
+        dropTargetView.button = button
+        dropTargetView.onFolderDropped = { [weak self] folderPath in
+            self?.openDroppedFolder(folderPath)
+        }
+        button.addSubview(dropTargetView)
+        NSLayoutConstraint.activate([
+            dropTargetView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            dropTargetView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            dropTargetView.topAnchor.constraint(equalTo: button.topAnchor),
+            dropTargetView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
+    }
+
     private func updateMenu() {
         let button = statusItem.button
-        let title = state.compactTitle
-        button?.title = title
+        button?.title = ""
+        button?.attributedTitle = NSAttributedString(
+            string: state.compactTitle,
+            attributes: [
+                .foregroundColor: NSColor.labelColor,
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            ]
+        )
         button?.toolTip = state.tooltip
 
-        statusLine.title = state.statusLine
+        statusLineView.attributedStringValue = state.statusLineAttributedTitle
         openItem.isEnabled = state.binaryPath != nil || state.localURL != nil
-        openWorkspaceItem.isEnabled = state.binaryPath != nil || state.preferredWorkspaceID != nil || state.activeWorkspaceID != nil
+        openWorkspaceItem.isEnabled = state.binaryPath != nil && state.hasWorkspaceFolderTarget
         stopItem.isEnabled = state.isRunActive && state.binaryPath != nil
         copyLocalItem.isEnabled = state.localURL != nil
         copyPhoneItem.isEnabled = state.phoneURL != nil
@@ -107,12 +235,33 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    private func openDroppedFolder(_ folderPath: String) {
+        guard !folderPath.isEmpty else { return }
+        _ = launchFolderImport(folderPath)
+    }
+
     @discardableResult
     private func runControlAction(_ action: String) -> Bool {
         guard let binaryPath = state.binaryPath else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
         process.arguments = ["--control", action]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    private func launchFolderImport(_ folderPath: String) -> Bool {
+        guard let binaryPath = state.binaryPath else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binaryPath)
+        process.arguments = ["--open-folder", folderPath]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
@@ -133,6 +282,7 @@ struct WrapperState {
     let binaryPath: String?
     let localURL: String?
     let phoneURL: String?
+    let repoPath: String?
     let workspaceName: String?
     let preferredWorkspaceID: String?
     let activeWorkspaceID: String?
@@ -143,6 +293,7 @@ struct WrapperState {
         binaryPath: nil,
         localURL: nil,
         phoneURL: nil,
+        repoPath: nil,
         workspaceName: nil,
         preferredWorkspaceID: nil,
         activeWorkspaceID: nil,
@@ -163,6 +314,7 @@ struct WrapperState {
             binaryPath: raw["binary_path"] as? String,
             localURL: (serverInfo["local_url"] as? String) ?? (serverInfo["localhost_url"] as? String),
             phoneURL: serverInfo["phone_url"] as? String,
+            repoPath: raw["repo_path"] as? String,
             workspaceName: raw["workspace_name"] as? String,
             preferredWorkspaceID: raw["preferred_workspace_id"] as? String,
             activeWorkspaceID: runStatus["workspace_id"] as? String,
@@ -173,6 +325,10 @@ struct WrapperState {
 
     var isRunActive: Bool {
         ["starting", "running", "stopping"].contains(runState)
+    }
+
+    var hasWorkspaceFolderTarget: Bool {
+        activeWorkspaceID != nil || preferredWorkspaceID != nil || repoPath != nil
     }
 
     var compactTitle: String {
@@ -192,14 +348,82 @@ struct WrapperState {
         }
     }
 
+    var compactAttributedTitle: NSAttributedString {
+        statusAttributedString(
+            label: compactTitle,
+            font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            textColor: .labelColor
+        )
+    }
+
     var tooltip: String {
-        let workspace = workspaceName ?? activeWorkspaceID ?? preferredWorkspaceID ?? "No workspace selected"
-        return "\(workspace)\n\(runState.capitalized): \(runStep)"
+        if let workspace = workspaceLabel {
+            return "\(workspace)\n\(runState.capitalized): \(runStep)"
+        }
+        return fallbackStatusText
     }
 
     var statusLine: String {
-        let workspace = workspaceName ?? activeWorkspaceID ?? preferredWorkspaceID ?? "No workspace selected"
-        return "\(workspace) — \(runState.capitalized): \(runStep)"
+        if let workspace = workspaceLabel {
+            return "\(workspace) — \(runState.capitalized): \(runStep)"
+        }
+        return fallbackStatusText
+    }
+
+    var statusLineAttributedTitle: NSAttributedString {
+        statusAttributedString(
+            label: statusLine,
+            font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            textColor: .labelColor
+        )
+    }
+
+    private var statusColor: NSColor {
+        switch runState {
+        case "running", "starting", "stopping":
+            return .systemOrange
+        case "failed":
+            return .systemRed
+        default:
+            return .systemGreen
+        }
+    }
+
+    private var workspaceLabel: String? {
+        let candidate = workspaceName ?? activeWorkspaceID ?? preferredWorkspaceID
+        guard let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+        return text
+    }
+
+    private var fallbackStatusText: String {
+        switch runState {
+        case "idle", "succeeded":
+            return "Idle."
+        default:
+            return "\(runState.capitalized): \(runStep)"
+        }
+    }
+
+    private func statusAttributedString(label: String, font: NSFont, textColor: NSColor) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: "● ",
+            attributes: [
+                .foregroundColor: statusColor,
+                .font: font,
+            ]
+        )
+        result.append(
+            NSAttributedString(
+                string: label,
+                attributes: [
+                    .foregroundColor: textColor,
+                    .font: font,
+                ]
+            )
+        )
+        return result
     }
 }
 

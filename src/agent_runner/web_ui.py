@@ -17,8 +17,7 @@ def render_workspaces(service: AgentRunnerService) -> str:
         rows.append(
             f"""
             <a class="rail-item" href="/m/workspaces/{escape(str(workspace["id"]))}">
-              <div class="rail-title">{escape(str(workspace["id"]))}</div>
-              <div class="rail-meta">{int(workspace["conversation_count"])} conversation(s)</div>
+              <div class="rail-title">{escape(str(workspace.get("display_name") or workspace["id"]))}</div>
             </a>
             """
         )
@@ -183,6 +182,14 @@ def render_web_app() -> str:
         <meta charset="utf-8" />
         <meta name="viewport" content="__LOCKED_VIEWPORT__" />
         <title>Alcove</title>
+        <script>
+          (() => {
+            const params = new URLSearchParams(window.location.search);
+            if ((params.get('view') || '').trim().toLowerCase() === 'chat') {
+              document.documentElement.classList.add('chat-breakout');
+            }
+          })();
+        </script>
         <style>
           :root {
             --bg: #f4f5f7;
@@ -234,6 +241,16 @@ def render_web_app() -> str:
             display: grid;
             grid-template-rows: auto minmax(0, 1fr);
             overflow: hidden;
+          }
+          html.chat-breakout body {
+            background: var(--panel);
+          }
+          html.chat-breakout .frame {
+            grid-template-rows: minmax(0, 1fr);
+          }
+          html.chat-breakout .topbar,
+          html.chat-breakout .setup-banner {
+            display: none !important;
           }
           .topbar {
             display: flex;
@@ -332,6 +349,9 @@ def render_web_app() -> str:
             min-height: 0;
             display: grid;
             grid-template-columns: var(--chat-pane-width) var(--pane-divider-width) minmax(0, 1fr);
+          }
+          .shell.single-pane {
+            grid-template-columns: minmax(0, 1fr);
           }
           .setup-banner {
             display: none;
@@ -456,6 +476,13 @@ def render_web_app() -> str:
           .pane-head-main {
             min-width: 0;
           }
+          .pane-head-side {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-end;
+            gap: 6px;
+            flex-wrap: wrap;
+          }
           .pane-head-actions {
             display: flex;
             gap: 6px;
@@ -466,6 +493,30 @@ def render_web_app() -> str:
           .pane-head-actions button {
             padding: 7px 9px;
             font-size: 12px;
+          }
+          .pane-collapse-button {
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+          }
+          .pane-collapse-button:hover {
+            background: #eef1f5;
+            color: var(--ink);
+          }
+          .pane-collapse-icon {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            transform: translateX(1px);
           }
           .eyebrow {
             margin: 0;
@@ -639,6 +690,9 @@ def render_web_app() -> str:
             gap: 0;
             margin-top: 10px;
             border-top: 1px solid var(--line-soft);
+            width: 100%;
+            min-width: 0;
+            align-self: stretch;
           }
           .home-shell {
             display: grid;
@@ -707,34 +761,151 @@ def render_web_app() -> str:
           .workspace-grid.compact {
             margin-top: 10px;
           }
+          .workspace-grid.home-list {
+            margin-top: 0;
+            border-top: 0;
+            min-height: 100%;
+            padding: 0 12px 0 14px;
+            box-sizing: border-box;
+          }
+          .workspace-grid.home-list.is-active {
+            background: linear-gradient(180deg, rgba(244, 250, 246, 0.92), rgba(238, 246, 241, 0.92));
+            box-shadow: inset 0 0 0 1px rgba(50, 87, 70, 0.1);
+          }
           .workspace-card {
-            text-align: left;
             border: 0;
             border-bottom: 1px solid var(--line-soft);
+            background: transparent;
+            padding: 0;
+            width: 100%;
+            min-width: 0;
+          }
+          .workspace-card-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-width: 0;
+          }
+          .workspace-card-main {
+            flex: 1;
+            min-width: 0;
+            width: 100%;
+            text-align: left;
+            border: 0;
             background: transparent;
             padding: 10px 0;
             cursor: pointer;
           }
-          .workspace-card:hover {
+          .workspace-card-main:hover {
             background: transparent;
             color: var(--accent);
           }
-          .workspace-card:hover .workspace-card-path,
-          .workspace-card:hover .workspace-card-meta {
+          .workspace-card-main:hover .workspace-card-title {
             color: var(--accent);
+          }
+          .workspace-card-info {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .workspace-card-info:hover {
+            background: #eef1f5;
+            color: var(--ink);
+          }
+          .workspace-card-open .workspace-card-info {
+            color: var(--accent);
+          }
+          .workspace-card-info-icon {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            transform: translateX(1px);
+            transition: transform 120ms ease;
+          }
+          .workspace-card-open .workspace-card-info-icon {
+            transform: rotate(90deg);
           }
           .workspace-card-title {
             font-size: 13px;
-            font-weight: 700;
-            margin-bottom: 4px;
+            font-weight: 400;
+            margin: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .workspace-card-drawer {
+            padding: 0 0 10px;
+          }
+          .workspace-card-drawer[hidden] {
+            display: none;
+          }
+          .workspace-card-drawer-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+          }
+          .workspace-card-drawer-copy {
+            flex: 1;
+            min-width: 0;
           }
           .workspace-card-path,
           .workspace-card-meta {
             font-size: 11px;
             color: var(--muted);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            white-space: normal;
+            overflow-wrap: anywhere;
+          }
+          .workspace-card-meta + .workspace-card-meta {
+            margin-top: 4px;
+          }
+          .workspace-card-drawer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            flex-shrink: 0;
+          }
+          .workspace-card-drawer-actions button {
+            min-height: 0;
+            padding: 0;
+            font-size: 11px;
+            font-weight: 500;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: var(--muted);
+            line-height: 1.4;
+          }
+          .workspace-card-drawer-actions button:hover {
+            color: var(--accent);
+          }
+          .workspace-card-drawer-actions button.workspace-remove {
+            color: var(--warning);
+            box-shadow: none;
+          }
+          .workspace-card-drawer-actions button.workspace-remove:hover {
+            color: #a9781f;
+          }
+          @media (max-width: 700px) {
+            .workspace-card-drawer-head {
+              flex-wrap: wrap;
+            }
+            .workspace-card-drawer-actions {
+              width: 100%;
+              justify-content: flex-start;
+            }
           }
           .message {
             line-height: 1.54;
@@ -787,6 +958,59 @@ def render_web_app() -> str:
             flex-wrap: wrap;
             gap: 6px;
           }
+          .composer-queue {
+            display: grid;
+            gap: 6px;
+            padding: 10px 0 8px;
+            border-bottom: 1px solid var(--line-soft);
+            margin-bottom: 4px;
+          }
+          .composer-queue[hidden] {
+            display: none;
+          }
+          .composer-queue-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+          }
+          .composer-queue-label {
+            margin: 0;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-soft);
+          }
+          .composer-queue-count {
+            font-size: 11px;
+            color: var(--muted);
+          }
+          .composer-queue-list {
+            display: grid;
+            gap: 4px;
+          }
+          .composer-queue-item {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 8px;
+            align-items: start;
+            min-width: 0;
+          }
+          .composer-queue-index {
+            min-width: 22px;
+            padding-top: 1px;
+            font-size: 11px;
+            color: var(--muted-soft);
+          }
+          .composer-queue-preview {
+            min-width: 0;
+            font-size: 12px;
+            color: var(--ink);
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
           .attachment-pill {
             display: inline-flex;
             align-items: center;
@@ -836,7 +1060,7 @@ def render_web_app() -> str:
             color: #7f868f;
           }
           .composer-box {
-            position: static;
+            position: relative;
             background: #fcfdff;
           }
           .composer-server-dot {
@@ -970,6 +1194,11 @@ def render_web_app() -> str:
             border-color: #274839;
             color: #f5f7f1;
           }
+          .primary:hover {
+            background: #48705a;
+            border-color: #365845;
+            color: #f5f7f1;
+          }
           .danger { color: var(--danger); }
           button:disabled {
             opacity: 0.45;
@@ -1028,42 +1257,10 @@ def render_web_app() -> str:
           .studio-preview-bar {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: flex-start;
             gap: 10px;
             padding: 8px 10px;
             border-bottom: 1px solid var(--line-soft);
-          }
-          .studio-preview-actions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-          }
-          .studio-preview-label {
-            font-size: 11px;
-            color: var(--muted);
-          }
-          .studio-preview-link-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            padding: 8px 10px;
-            border-bottom: 1px solid var(--line-soft);
-            background: #f7faf8;
-          }
-          .studio-preview-link-copy {
-            font-size: 11px;
-            color: var(--muted);
-            flex: 1 1 260px;
-            min-width: 0;
-            overflow-wrap: anywhere;
-          }
-          .studio-preview-link-copy strong {
-            color: var(--ink);
-            font-weight: 600;
           }
           .studio-preview-frame {
             width: 100%;
@@ -1216,6 +1413,156 @@ def render_web_app() -> str:
             text-transform: uppercase;
             color: var(--muted-soft);
           }
+          .conversation-settings-card {
+            display: grid;
+            gap: 12px;
+            border: 1px solid var(--line);
+            background: #fcfdff;
+            padding: 12px;
+          }
+          .conversation-settings-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 12px;
+          }
+          .conversation-settings-label {
+            margin: 0 0 4px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-soft);
+          }
+          .conversation-settings-title {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--ink);
+          }
+          .conversation-settings-meta {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+          }
+          .conversation-context-card {
+            display: grid;
+            gap: 8px;
+            padding-top: 2px;
+          }
+          .conversation-context-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 12px;
+          }
+          .conversation-context-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: flex-end;
+          }
+          .conversation-context-badge {
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--muted);
+            padding: 4px 8px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+          .conversation-context-badge.is-active {
+            border-color: rgba(62, 106, 81, 0.24);
+            background: rgba(62, 106, 81, 0.08);
+            color: var(--ok);
+          }
+          .conversation-context-meter {
+            height: 6px;
+            background: #e7ebef;
+            overflow: hidden;
+          }
+          .conversation-context-meter span {
+            display: block;
+            height: 100%;
+            background: linear-gradient(90deg, #4a715a 0%, #8bad93 100%);
+          }
+          .settings-action-menu {
+            position: relative;
+            min-width: 180px;
+          }
+          .settings-action-menu summary {
+            list-style: none;
+            cursor: pointer;
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+          }
+          .settings-action-menu summary::-webkit-details-marker {
+            display: none;
+          }
+          .settings-action-menu[open] summary {
+            border-color: var(--line-strong);
+          }
+          .settings-action-list {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 6px);
+            z-index: 3;
+            min-width: 220px;
+            display: grid;
+            gap: 2px;
+            padding: 6px;
+            border: 1px solid var(--line);
+            background: #fcfdff;
+            box-shadow: 0 12px 26px rgba(17, 22, 29, 0.12);
+          }
+          .settings-action-list button {
+            width: 100%;
+            justify-content: flex-start;
+            text-align: left;
+            border: 0;
+            background: transparent;
+            padding: 8px 10px;
+            font: inherit;
+            font-size: 13px;
+            color: var(--ink);
+          }
+          .settings-action-list button:hover {
+            background: #eef2f6;
+          }
+          .settings-action-list button.settings-danger,
+          .archived-chat-actions button.settings-danger {
+            color: var(--warning);
+          }
+          .archived-chat-list {
+            display: grid;
+            gap: 8px;
+          }
+          .archived-chat-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            padding-top: 10px;
+            border-top: 1px solid var(--line-soft);
+          }
+          .archived-chat-item:first-child {
+            padding-top: 0;
+            border-top: 0;
+          }
+          .archived-chat-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+          }
+          .archived-chat-empty {
+            font-size: 12px;
+            color: var(--muted);
+          }
           .connection-card {
             border: 1px solid var(--line);
             background: #fcfdff;
@@ -1315,8 +1662,14 @@ def render_web_app() -> str:
               flex-direction: column;
               align-items: stretch;
             }
+            .pane-head-side {
+              justify-content: flex-start;
+            }
             .pane-head-actions {
               justify-content: flex-start;
+            }
+            .pane-collapse-button {
+              display: none;
             }
             .thread-title {
               font-size: 17px;
@@ -1357,11 +1710,30 @@ def render_web_app() -> str:
               min-height: 92px;
               font-size: 16px;
             }
+            .composer-queue-item {
+              grid-template-columns: 20px minmax(0, 1fr);
+              gap: 6px;
+            }
             .context-grid input,
             .settings-body input,
             .settings-body select,
             .settings-body textarea {
               font-size: 16px;
+            }
+            .conversation-settings-head,
+            .archived-chat-item {
+              grid-template-columns: 1fr;
+            }
+            .settings-action-menu {
+              min-width: 0;
+            }
+            .settings-action-list {
+              left: 0;
+              right: auto;
+              min-width: min(100%, 240px);
+            }
+            .archived-chat-actions {
+              justify-content: flex-start;
             }
             .composer-server-dot {
               top: 14px;
@@ -1412,6 +1784,9 @@ def render_web_app() -> str:
             .composer {
               --composer-action-space: 64px;
             }
+            .composer-queue {
+              padding-top: 8px;
+            }
             .composer-actions {
               right: 8px;
               gap: 4px;
@@ -1452,13 +1827,13 @@ def render_web_app() -> str:
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">Workspace</p>
-                    <button class="menu-item" type="button" onclick="clearConversation()">Clear Chat</button>
                     <button class="menu-item" type="button" onclick="stopRun()">Stop Run</button>
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">View</p>
-                    <button class="menu-item" type="button" onclick="toggleReviewPane()">Review Panel</button>
+                    <button id="menu-toggle-review-pane" class="menu-item" type="button" onclick="toggleReviewPane()">Hide Review Panel</button>
                     <button class="menu-item" type="button" onclick="showStudioProjectDetails()">Project Details</button>
+                    <button id="menu-open-breakout" class="menu-item" type="button" onclick="openBreakoutWindow()">Breakout Window</button>
                     <button class="menu-item" type="button" onclick="hardRefresh()">Reload</button>
                     <button class="menu-item" type="button" onclick="openSettings()">Settings</button>
                   </section>
@@ -1475,14 +1850,15 @@ def render_web_app() -> str:
                   </div>
                   <div class="composer-wrap">
                     <form class="composer" onsubmit="return submitComposer(event)">
+                      <div id="composer-queue" class="composer-queue" hidden></div>
                       <div class="composer-box">
                         <textarea id="composer" placeholder="Describe what should happen next."></textarea>
-                      </div>
-                      <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
-                      <div class="composer-actions">
-                        <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
-                        <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
-                        <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
+                        <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
+                        <div class="composer-actions">
+                          <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
+                          <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
+                          <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
+                        </div>
                       </div>
                       <input id="composer-attachments" type="file" accept="image/*" multiple hidden onchange="onComposerFilesChanged()" />
                       <div id="composer-attachment-list" class="attachment-list" hidden></div>
@@ -1502,7 +1878,7 @@ def render_web_app() -> str:
               ></div>
               <aside class="pane review-pane">
                 <div class="review">
-                  <div class="pane-head">
+                  <div id="review-pane-head" class="pane-head">
                     <div class="pane-head-top">
                       <div class="pane-head-main">
                         <button class="mobile-back" type="button" onclick="closeMobilePanes()">Back</button>
@@ -1510,7 +1886,17 @@ def render_web_app() -> str:
                         <h1 id="side-title">Run Output</h1>
                         <p id="side-copy" class="pane-copy">Operational detail lives here, not in the bubbles.</p>
                       </div>
-                      <div id="side-actions" class="pane-head-actions"></div>
+                      <div class="pane-head-side">
+                        <div id="side-actions" class="pane-head-actions"></div>
+                        <button
+                          id="review-pane-collapse"
+                          class="pane-collapse-button"
+                          type="button"
+                          onclick="toggleReviewPane()"
+                          aria-label="Hide review panel"
+                          title="Hide review panel"
+                        ><span class="pane-collapse-icon" aria-hidden="true">></span></button>
+                      </div>
                     </div>
                   </div>
                   <div id="review-scroll" class="review-scroll">
@@ -1537,16 +1923,25 @@ def render_web_app() -> str:
                 <div id="connections-panel" class="composer-hint">Loading connections…</div>
               </section>
               <section class="settings-section">
+                <h4>Conversation</h4>
+                <div id="conversation-settings-panel" class="composer-hint">Choose a workspace to manage its chats.</div>
+                <div id="conversation-settings-status" class="composer-hint"></div>
+              </section>
+              <section class="settings-section">
                 <h4>Runtime</h4>
                 <label>Provider
-                  <select id="settings-provider">
+                  <select id="settings-provider" onchange="updateContextCapHint()">
                     <option value="codex">codex</option>
                     <option value="ollama">ollama</option>
                   </select>
                 </label>
                 <label>Default model
-                  <select id="settings-model"></select>
+                  <select id="settings-model" onchange="updateContextCapHint()"></select>
                 </label>
+                <label>Context history budget (chars)
+                  <input id="settings-context-char-cap" type="number" min="100" step="100" placeholder="Auto" oninput="updateContextCapHint()" />
+                </label>
+                <div id="settings-context-char-cap-hint" class="composer-hint"></div>
                 <label>Ollama host
                   <input id="settings-ollama-host" placeholder="http://127.0.0.1:11434" />
                 </label>
@@ -1597,7 +1992,7 @@ def render_web_app() -> str:
                 <input id="studio-artifact-title" placeholder="Moon Mango Jump" />
               </label>
               <label id="studio-template-label">Template
-                <select id="studio-template-kind">
+                <select id="studio-template-kind" onchange="updateStudioTemplateOptions()">
                 </select>
               </label>
               <label id="studio-theme-label">Theme prompt (optional)
@@ -1616,16 +2011,22 @@ def render_web_app() -> str:
             workspaceId: null,
             workspace: null,
             workspaces: [],
+            workspaceDetailsOpenId: null,
             conversationCache: null,
+            settingsConversations: [],
             lastSignature: null,
             serverInfo: null,
             runStatus: { state: 'idle', step: 'Idle' },
             review: null,
             submitting: false,
+            voiceCapturePending: false,
             eventCursor: '0',
             assistantMode: 'ask',
-            reviewPaneHidden: true,
+            reviewPaneHidden:
+              document.documentElement.classList.contains('chat-breakout') ||
+              window.matchMedia('(max-width: 880px)').matches,
             setupReport: null,
+            breakoutChatOnly: document.documentElement.classList.contains('chat-breakout'),
           };
           const CODEX_MODEL_OPTIONS = [
             { value: 'gpt-5.4', label: 'GPT-5.4 (medium)' },
@@ -1634,6 +2035,7 @@ def render_web_app() -> str:
           ];
           const STUDIO_TEMPLATES = {
             studio_game: [
+              { value: 'runner', label: 'Runner' },
               { value: 'platformer', label: 'Platformer' },
               { value: 'top-down', label: 'Top-down Adventure' },
               { value: 'clicker', label: 'Clicker' },
@@ -1739,6 +2141,34 @@ def render_web_app() -> str:
               workspaceId: workspaceId || null,
               conversationId: conversationId || null,
             };
+          }
+
+          function breakoutWindowUrl() {
+            if (!state.workspaceId || !state.conversationId) return null;
+            const url = new URL(window.location.href);
+            url.searchParams.set('workspace_id', state.workspaceId);
+            url.searchParams.set('conversation_id', state.conversationId);
+            url.searchParams.set('view', 'chat');
+            url.searchParams.delete('_ar_open');
+            return url.toString();
+          }
+
+          function openBreakoutWindow() {
+            const url = breakoutWindowUrl();
+            if (!url) {
+              window.alert('Open a conversation first.');
+              return;
+            }
+            const windowName = `alcove-chat-${state.workspaceId}-${state.conversationId}`;
+            const popup = window.open(
+              url,
+              windowName,
+              'popup=yes,width=620,height=860,resizable=yes,scrollbars=no'
+            );
+            if (popup && typeof popup.focus === 'function') {
+              popup.focus();
+            }
+            closeActionsMenu();
           }
 
           function applyComposerMode(mode, rememberPreference = false) {
@@ -1935,10 +2365,23 @@ def render_web_app() -> str:
           function updateControls() {
             const hasConversation = Boolean(state.conversationId && state.workspaceId);
             const busy = state.submitting;
-            const ids = ['attach-button', 'voice-button', 'send-button'];
+            const ids = ['attach-button', 'send-button'];
             for (const id of ids) {
               const el = document.getElementById(id);
               if (el) el.disabled = !hasConversation || busy;
+            }
+            const voiceButton = document.getElementById('voice-button');
+            if (voiceButton) {
+              voiceButton.disabled = !hasConversation || busy || state.voiceCapturePending;
+              const isNative = Boolean(state.serverInfo?.native_transcription_available);
+              const title = state.voiceCapturePending
+                ? 'Listening...'
+                : isNative
+                  ? 'Speech to text (native)'
+                  : 'Speech to text';
+              voiceButton.title = title;
+              voiceButton.setAttribute('aria-label', title);
+              voiceButton.textContent = state.voiceCapturePending ? '...' : 'Mic';
             }
             const textarea = document.getElementById('composer');
             if (textarea) textarea.disabled = !hasConversation || busy;
@@ -1949,6 +2392,23 @@ def render_web_app() -> str:
               const disabled = state.assistantMode !== 'dev';
               loopMode.disabled = disabled;
               loopMode.title = disabled ? 'Loop requires dev capability mode.' : '';
+            }
+            const reviewToggle = document.getElementById('menu-toggle-review-pane');
+            if (reviewToggle) {
+              const hasReviewWorkspace = hasConversation && !isStudioWorkspace(state.workspace);
+              reviewToggle.disabled = !hasConversation || isStudioWorkspace(state.workspace);
+              reviewToggle.textContent = state.reviewPaneHidden && hasReviewWorkspace ? 'Show Review Panel' : 'Hide Review Panel';
+              reviewToggle.title =
+                !hasConversation
+                  ? 'Open a conversation first.'
+                  : isStudioWorkspace(state.workspace)
+                    ? 'Studio stays visible in this workspace.'
+                    : '';
+            }
+            const breakoutButton = document.getElementById('menu-open-breakout');
+            if (breakoutButton) {
+              breakoutButton.disabled = !hasConversation;
+              breakoutButton.title = hasConversation ? '' : 'Open a conversation first.';
             }
           }
 
@@ -1969,29 +2429,81 @@ def render_web_app() -> str:
             if (input && !input.disabled) input.click();
           }
 
-          function startVoiceCapture() {
+          function preferredVoiceLocale() {
+            return String(navigator.language || 'en-US').trim() || 'en-US';
+          }
+
+          function appendVoiceTranscript(textarea, transcript) {
+            const nextValue = String(transcript || '').trim();
+            if (!nextValue) return;
+            const prefix = textarea.value.trim();
+            textarea.value = prefix ? `${prefix} ${nextValue}` : nextValue;
+            textarea.focus();
+          }
+
+          function setVoiceCapturePending(pending) {
+            state.voiceCapturePending = Boolean(pending);
+            updateControls();
+          }
+
+          async function startVoiceCapture() {
             const textarea = document.getElementById('composer');
-            if (!textarea || textarea.disabled) return;
+            if (!textarea || textarea.disabled || state.voiceCapturePending) return;
+            if (state.serverInfo?.native_transcription_available) {
+              const handled = await startNativeVoiceCapture(textarea);
+              if (handled) return;
+            }
+            startBrowserVoiceCapture(textarea);
+          }
+
+          async function startNativeVoiceCapture(textarea) {
+            setVoiceCapturePending(true);
+            try {
+              const payload = await fetchJson('/api/native/transcribe', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ locale: preferredVoiceLocale() }),
+              });
+              appendVoiceTranscript(textarea, payload.transcript || '');
+              return true;
+            } catch (error) {
+              const status = Number(error?.status || 0);
+              if (status === 404 || status === 409) {
+                return false;
+              }
+              window.alert(error.message || 'Could not capture speech. Please try again.');
+              return true;
+            } finally {
+              setVoiceCapturePending(false);
+            }
+          }
+
+          function startBrowserVoiceCapture(textarea) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
               window.alert('Speech recognition is not available in this browser.');
               return;
             }
+            setVoiceCapturePending(true);
             const recognition = new SpeechRecognition();
-            recognition.lang = 'en-US';
+            recognition.lang = preferredVoiceLocale();
             recognition.interimResults = false;
             recognition.maxAlternatives = 1;
             recognition.onresult = (event) => {
-              const transcript = String(event.results?.[0]?.[0]?.transcript || '').trim();
-              if (!transcript) return;
-              const prefix = textarea.value.trim();
-              textarea.value = prefix ? `${prefix} ${transcript}` : transcript;
-              textarea.focus();
+              appendVoiceTranscript(textarea, String(event.results?.[0]?.[0]?.transcript || ''));
             };
             recognition.onerror = () => {
               window.alert('Could not capture speech. Please try again.');
             };
-            recognition.start();
+            recognition.onend = () => {
+              setVoiceCapturePending(false);
+            };
+            try {
+              recognition.start();
+            } catch (_) {
+              setVoiceCapturePending(false);
+              window.alert('Could not start speech recognition. Please try again.');
+            }
           }
 
           function removeComposerAttachment(index) {
@@ -2067,6 +2579,11 @@ def render_web_app() -> str:
             return `${seconds}s`;
           }
 
+          function formatCount(value) {
+            const number = Math.max(0, Math.round(Number(value) || 0));
+            return number.toLocaleString();
+          }
+
           function currentRunElapsedLabel(status) {
             const stateText = String(status?.state || 'idle');
             const startedAt = parseTimestamp(status?.started_at || status?.updated_at || status?.heartbeat_at);
@@ -2112,18 +2629,24 @@ def render_web_app() -> str:
                 const payload = await response.json();
                 detail = payload.detail || detail;
               } catch (_) {}
-              throw new Error(detail);
+              const error = new Error(detail);
+              error.status = response.status;
+              throw error;
             }
             return response.json();
           }
 
           function renderWorkspaces(workspaces) {
             state.workspaces = workspaces;
+            if (state.workspaceDetailsOpenId && !workspaces.some((workspace) => workspace.id === state.workspaceDetailsOpenId)) {
+              state.workspaceDetailsOpenId = null;
+            }
             if (state.workspaceId) {
               state.workspace = workspaces.find((workspace) => workspace.id === state.workspaceId) || state.workspace;
             }
             if (!state.workspaceId || !state.conversationId) {
               renderWorkspaceSelector(workspaces);
+              renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
             }
           }
 
@@ -2151,6 +2674,67 @@ def render_web_app() -> str:
             return String(workspaceKind || '') === 'studio_game' ? 'Play' : 'Preview';
           }
 
+          function workspaceTitle(workspace) {
+            return String(workspace?.display_name || workspace?.id || 'Workspace').trim() || 'Workspace';
+          }
+
+          function workspaceSummaryLine(workspace) {
+            if (isStudioWorkspace(workspace)) {
+              return `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}`;
+            }
+            return workspace.repo_path || 'No repo path set yet';
+          }
+
+          function workspaceMetaLines(workspace) {
+            const lines = [];
+            const updated = formatStamp(workspace?.updated_at);
+            if (updated) {
+              lines.push(`Updated ${updated}`);
+            }
+            if (workspace?.display_name && workspace?.id && workspace.display_name !== workspace.id) {
+              lines.push(`Workspace ID: ${workspace.id}`);
+            }
+            return lines;
+          }
+
+          function workspaceCardMarkup(workspace) {
+            const workspaceId = String(workspace?.id || '').trim();
+            const detailsOpen = state.workspaceDetailsOpenId === workspaceId;
+            return `
+              <article class="workspace-card${detailsOpen ? ' workspace-card-open' : ''}">
+                <div class="workspace-card-row">
+                  <button class="workspace-card-main" type="button" onclick="selectWorkspace('${workspaceId}')">
+                    <div class="workspace-card-title">${escapeHtml(workspaceTitle(workspace))}</div>
+                  </button>
+                  <button
+                    class="workspace-card-info"
+                    type="button"
+                    onclick="toggleWorkspaceDetails('${workspaceId}', event)"
+                    aria-label="${detailsOpen ? 'Collapse workspace details' : 'Expand workspace details'}"
+                    title="${detailsOpen ? 'Collapse workspace details' : 'Expand workspace details'}"
+                    aria-expanded="${detailsOpen ? 'true' : 'false'}"
+                  ><span class="workspace-card-info-icon" aria-hidden="true">></span></button>
+                </div>
+                <div class="workspace-card-drawer"${detailsOpen ? '' : ' hidden'}>
+                  <div class="workspace-card-drawer-head">
+                    <div class="workspace-card-drawer-copy">
+                      <div class="workspace-card-path">${escapeHtml(workspaceSummaryLine(workspace))}</div>
+                      ${workspaceMetaLines(workspace).map((line) => `<div class="workspace-card-meta">${escapeHtml(line)}</div>`).join('')}
+                    </div>
+                    <div class="workspace-card-drawer-actions">
+                      <button type="button" onclick="renameWorkspace('${workspaceId}', event)">Rename</button>
+                      <button class="workspace-remove" type="button" onclick="removeWorkspace('${workspaceId}', event)">Remove</button>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            `;
+          }
+
+          function renderWorkspaceCards(workspaces) {
+            return workspaces.map((workspace) => workspaceCardMarkup(workspace)).join('');
+          }
+
           function studioPlaceholder(workspaceKind) {
             const value = String(workspaceKind || '');
             if (value === 'studio_web') return 'Ask for a website change, like "make the hero bolder" or "add a pricing section".';
@@ -2175,7 +2759,66 @@ def render_web_app() -> str:
             return 'Preview will appear here after the game is created.';
           }
 
-          function studioDefaultTitle(workspaceKind) {
+          function studioTemplateDefaults(workspaceKind, templateKind) {
+            const workspace = String(workspaceKind || '');
+            const template = String(templateKind || '');
+            if (workspace === 'studio_game') {
+              if (template === 'runner') {
+                return {
+                  title: 'Night Shift Detective',
+                  theme: 'A moonlit city runner where a detective leaps over street hazards and gathers clues.',
+                };
+              }
+              if (template === 'top-down') {
+                return {
+                  title: 'Lantern Lane Mystery',
+                  theme: 'A cozy neighborhood mystery with winding paths, hidden clues, and calm exploration.',
+                };
+              }
+              if (template === 'clicker') {
+                return {
+                  title: 'Clue Collector',
+                  theme: 'A detective desk full of evidence, red string, and satisfying clue-by-clue progress.',
+                };
+              }
+              if (template === 'blank') {
+                return {
+                  title: 'New Game',
+                  theme: 'Bright, playful, and easy to understand.',
+                };
+              }
+              return {
+                title: 'Moon Mango Jump',
+                theme: 'A playful jungle at sunset with friendly robots.',
+              };
+            }
+            if (workspace === 'studio_web') {
+              return {
+                title: 'New Website',
+                theme: 'A bold launch page for a calm, premium product.',
+              };
+            }
+            if (workspace === 'studio_data') {
+              return {
+                title: 'New Dataset',
+                theme: 'Revenue data with trust cues, clear trends, and simple charts.',
+              };
+            }
+            if (workspace === 'studio_docs') {
+              return {
+                title: 'New Docs',
+                theme: 'Helpful docs with a friendly getting started flow.',
+              };
+            }
+            return {
+              title: 'New Studio',
+              theme: 'Clear, approachable, and easy to shape.',
+            };
+          }
+
+          function studioDefaultTitle(workspaceKind, templateKind) {
+            const defaults = studioTemplateDefaults(workspaceKind, templateKind);
+            if (defaults?.title) return defaults.title;
             const value = String(workspaceKind || '');
             if (value === 'studio_web') return 'New Website';
             if (value === 'studio_data') return 'New Dataset';
@@ -2270,24 +2913,8 @@ def render_web_app() -> str:
               return;
             }
             host.innerHTML = `
-              <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                <h2>Alcove</h2>
-                <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
-                <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
-                <div class="home-actions">
-                  <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                  <button type="button" onclick="promptImportWorkspace()">Import</button>
-                </div>
-                <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
-                <section class="workspace-grid">
-                  ${workspaces.map((workspace) => `
-                    <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
-                      <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
-                      <div class="workspace-card-path">${escapeHtml(isStudioWorkspace(workspace) ? `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}` : (workspace.repo_path || 'No repo path set yet'))}</div>
-                      <div class="workspace-card-meta">${escapeHtml(String(workspace.conversation_count || 1))} chat · ${escapeHtml(formatStamp(workspace.updated_at))}</div>
-                    </button>
-                  `).join('')}
-                </section>
+              <section id="workspace-dropzone" class="workspace-grid home-list">
+                ${renderWorkspaceCards(workspaces)}
               </section>
             `;
           }
@@ -2296,12 +2923,18 @@ def render_web_app() -> str:
             state.workspaceId = null;
             state.conversationId = null;
             state.workspace = null;
+            state.workspaceDetailsOpenId = null;
+            state.settingsConversations = [];
             state.lastSignature = null;
-            state.reviewPaneHidden = true;
+            state.reviewPaneHidden = state.breakoutChatOnly || isMobileViewport();
+            clearRememberedWorkspaceSelection();
             closeMobilePanes();
             applyReviewPaneVisibility();
             renderWorkspaceSelector(state.workspaces || []);
             loadReview();
+            if (isSettingsOpen()) {
+              loadConversationSettings().catch(() => {});
+            }
             updateControls();
           }
 
@@ -2334,7 +2967,10 @@ def render_web_app() -> str:
             }
             await selectWorkspace(workspaceId, conversationId);
             if (requested.fromUrl && window.history && window.history.replaceState) {
-              window.history.replaceState({}, '', window.location.pathname);
+              const url = new URL(window.location.href);
+              url.searchParams.delete('workspace_id');
+              url.searchParams.delete('conversation_id');
+              window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
             }
             return true;
           }
@@ -2360,17 +2996,70 @@ def render_web_app() -> str:
                   <h3>Recent Workspaces</h3>
                   <p>Pick up where you left off.</p>
                   <section class="workspace-grid compact">
-                    ${recent.length ? recent.map((workspace) => `
-                      <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
-                        <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
-                        <div class="workspace-card-path">${escapeHtml(isStudioWorkspace(workspace) ? `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}` : (workspace.repo_path || 'No repo path set yet'))}</div>
-                        <div class="workspace-card-meta">${escapeHtml(String(workspace.conversation_count || 1))} chat · ${escapeHtml(formatStamp(workspace.updated_at))}</div>
-                      </button>
-                    `).join('') : '<div class="empty">No recent workspaces yet.</div>'}
+                    ${recent.length ? renderWorkspaceCards(recent) : '<div class="empty">No recent workspaces yet.</div>'}
                   </section>
                 </section>
               </section>
             `;
+          }
+
+          function toggleWorkspaceDetails(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            state.workspaceDetailsOpenId = state.workspaceDetailsOpenId === workspaceId ? null : workspaceId;
+            renderWorkspaceSelector(state.workspaces || []);
+            renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
+          }
+
+          async function renameWorkspace(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            const workspace = (state.workspaces || []).find((item) => item.id === workspaceId);
+            if (!workspace) return;
+            const currentName = workspaceTitle(workspace);
+            const nextName = (window.prompt('Rename workspace', currentName) || '').trim();
+            if (!nextName || nextName === currentName) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ display_name: nextName }),
+              });
+              state.workspaceDetailsOpenId = null;
+              await loadWorkspaces();
+            } catch (error) {
+              window.alert(error.message || 'Could not rename workspace.');
+            }
+          }
+
+          async function removeWorkspace(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            const workspace = (state.workspaces || []).find((item) => item.id === workspaceId);
+            if (!workspace) return;
+            const confirmed = window.confirm(
+              `Remove "${workspaceTitle(workspace)}" from Alcove? This removes the workspace and chat history from Alcove, but leaves any repo files on disk.`
+            );
+            if (!confirmed) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+                method: 'DELETE',
+              });
+              if (state.workspaceId === workspaceId) {
+                goToWorkspaceSelector();
+              }
+              state.workspaceDetailsOpenId = null;
+              await loadWorkspaces();
+              await loadReview();
+            } catch (error) {
+              window.alert(error.message || 'Could not remove workspace.');
+            }
           }
 
           function renderThread(conversation) {
@@ -2383,6 +3072,7 @@ def render_web_app() -> str:
               (host.scrollHeight - host.scrollTop - host.clientHeight) < 48;
             if (!messages.length) {
               host.innerHTML = '<div class="empty">No messages yet. Start with a short prompt to verify the browser workflow.</div>';
+              renderComposerQueue();
               return;
             }
             host.innerHTML = messages.map((message) => {
@@ -2392,6 +3082,7 @@ def render_web_app() -> str:
             if (shouldStickToBottom) {
               host.scrollTop = host.scrollHeight;
             }
+            renderComposerQueue();
           }
 
           function renderStatus(status) {
@@ -2406,6 +3097,7 @@ def render_web_app() -> str:
             } else {
               setServerDot('online', 'Ready');
             }
+            renderComposerQueue();
             const buildBadge = document.getElementById('build-badge');
             if (buildBadge) {
               buildBadge.textContent = state.serverInfo?.build_label || 'Build unavailable';
@@ -2444,35 +3136,56 @@ def render_web_app() -> str:
           }
 
           function toggleReviewPane() {
+            if (isStudioWorkspace(state.workspace)) {
+              state.reviewPaneHidden = false;
+              applyReviewPaneVisibility();
+              updateControls();
+              closeActionsMenu();
+              return;
+            }
             state.reviewPaneHidden = !state.reviewPaneHidden;
             applyReviewPaneVisibility();
+            updateControls();
             closeActionsMenu();
           }
 
           function applyReviewPaneVisibility() {
+            const shell = document.getElementById('shell');
             const pane = document.querySelector('.review-pane');
-            if (!pane) return;
-            pane.style.display = state.reviewPaneHidden ? 'none' : '';
+            const divider = document.getElementById('pane-divider');
+            const singlePane =
+              state.breakoutChatOnly ||
+              (state.reviewPaneHidden && !isStudioWorkspace(state.workspace));
+            if (shell) shell.classList.toggle('single-pane', singlePane);
+            if (pane) pane.style.display = singlePane ? 'none' : '';
+            if (divider) divider.style.display = singlePane ? 'none' : '';
           }
 
           function renderReviewPane(payload) {
             state.review = payload;
             const host = document.getElementById('review-scroll');
+            const paneHead = document.getElementById('review-pane-head');
             const eyebrow = document.getElementById('side-eyebrow');
             const title = document.getElementById('side-title');
             const copy = document.getElementById('side-copy');
             const actions = document.getElementById('side-actions');
+            const collapseButton = document.getElementById('review-pane-collapse');
             if (!state.workspaceId || !state.conversationId || !state.workspace) {
+              if (paneHead) paneHead.style.display = 'none';
+              if (collapseButton) collapseButton.style.display = 'none';
               host.classList.remove('studio-scroll');
               if (actions) actions.innerHTML = '';
               if (eyebrow) eyebrow.textContent = 'Home';
               if (title) title.textContent = 'Bring in a project';
               if (copy) copy.textContent = 'Open a repo or start a Studio. Preview, publish, and run details show up here.';
               host.innerHTML = renderHomePane();
+              renderComposerQueue();
               return;
             }
+            if (paneHead) paneHead.style.display = '';
             if (isStudioWorkspace(state.workspace)) {
               host.classList.add('studio-scroll');
+              if (collapseButton) collapseButton.style.display = 'none';
               if (eyebrow) eyebrow.textContent = 'Studio';
               if (title) title.textContent = state.workspace.artifact_title || state.workspace.game_title || state.workspace.display_name || 'Alcove Studio';
               if (copy) copy.textContent = 'Preview, publish, and project details live here beside the workspace chat.';
@@ -2485,9 +3198,11 @@ def render_web_app() -> str:
                 `;
               }
               host.innerHTML = renderStudioPane();
+              renderComposerQueue();
               return;
             }
             host.classList.remove('studio-scroll');
+            if (collapseButton) collapseButton.style.display = '';
             if (actions) actions.innerHTML = '';
             if (eyebrow) eyebrow.textContent = 'Review';
             if (title) title.textContent = 'Run Output';
@@ -2496,7 +3211,6 @@ def render_web_app() -> str:
             const checks = payload.checks || {};
             const changedFiles = payload.changed_files || [];
             const queue = payload.queue || {};
-            const queuedItems = queue.items || [];
             const summary = payload.summary || 'No summary yet.';
             const latest = (payload.latest_result && payload.latest_result.content) || '';
             host.innerHTML = `
@@ -2507,14 +3221,6 @@ def render_web_app() -> str:
                 <p class="review-line subtle">Mode: ${escapeHtml(run.mode || 'message')}</p>
                 <p class="review-line subtle">Queued: ${escapeHtml(String(run.queue_count ?? queue.global_count ?? 0))}</p>
                 <p class="review-line subtle">Updated: ${escapeHtml(formatStamp(run.updated_at))}</p>
-              </section>
-              <section class="review-card">
-                <p class="review-title">Queued Messages</p>
-                ${
-                  queuedItems.length
-                    ? `<ul class="review-list">${queuedItems.map((item) => `<li>#${escapeHtml(String(item.position || '?'))}: ${escapeHtml(item.content_preview || '')}</li>`).join('')}</ul>`
-                    : '<p class="review-line subtle">No queued messages for this chat.</p>'
-                }
               </section>
               <section class="review-card">
                 <p class="review-title">Summary</p>
@@ -2545,16 +3251,13 @@ def render_web_app() -> str:
                 <p class="review-line subtle">${escapeHtml(latest || 'No operational output yet.')}</p>
               </section>
             `;
+            renderComposerQueue();
           }
 
           function renderStudioPane() {
             const workspace = state.workspace || {};
-            const links = studioWorkspaceLinks(workspace);
             const previewUrl = workspace.preview_url ? `${workspace.preview_url}${workspace.preview_url.includes('?') ? '&' : '?'}v=${Date.now()}` : '';
-            const publishUrl = workspace.publish_url || '';
             const workspaceKind = workspace.workspace_kind || 'studio_game';
-            const previewLink = links.preview_current || '';
-            const phonePreviewLink = links.preview_phone || '';
             return `
               <section class="studio-shell">
                 <section class="studio-preview-card">
@@ -2565,17 +3268,7 @@ def render_web_app() -> str:
                       <div class="studio-pill">${escapeHtml(childFriendlyPreviewState(workspace))}</div>
                       <div class="studio-pill">${escapeHtml(workspace.publish_state === 'published' ? 'Published' : 'Not Published')}</div>
                     </div>
-                    <div class="studio-preview-actions">
-                      ${previewLink ? `<button type="button" onclick="openStudioWorkspaceLink('preview_current')">${escapeHtml(studioPrimaryAction(workspaceKind))} Link</button>` : ''}
-                      ${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Link</button>` : ''}
-                      ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
-                    </div>
                   </div>
-                  ${
-                    previewLink
-                      ? `<div class="studio-preview-link-row"><div class="studio-preview-link-copy"><strong>${escapeHtml(studioPrimaryAction(workspaceKind))} address:</strong> ${escapeHtml(previewLink)}</div>${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Address</button>` : `<button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Address</button>`}</div>`
-                      : ''
-                  }
                   ${
                     previewUrl
                       ? `<iframe class="studio-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(studioArtifactNoun(workspaceKind))} preview"></iframe>`
@@ -2625,6 +3318,7 @@ def render_web_app() -> str:
           }
 
           async function selectWorkspace(workspaceId, conversationIdOverride = null) {
+            state.workspaceDetailsOpenId = null;
             state.workspaceId = workspaceId;
             const workspace = await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
             state.workspace = workspace;
@@ -2635,6 +3329,9 @@ def render_web_app() -> str:
             renderWorkspaces((await fetchJson('/api/workspaces')).workspaces || []);
             await loadConversationDetail();
             await loadReview();
+            if (isSettingsOpen()) {
+              await loadConversationSettings();
+            }
           }
 
           async function loadConversationDetail() {
@@ -2778,6 +3475,8 @@ def render_web_app() -> str:
             document.getElementById('settings-ollama-host').value = payload.ollama_host || 'http://127.0.0.1:11434';
             document.getElementById('settings-max-step-retries').value = String(payload.max_step_retries ?? 2);
             document.getElementById('settings-phase-timeout').value = String(payload.phase_timeout_seconds ?? 240);
+            document.getElementById('settings-context-char-cap').value =
+              payload.context_char_cap == null ? '' : String(payload.context_char_cap);
             setSelectOptions(
               'settings-model',
               modelOptionUnion([]),
@@ -2808,6 +3507,7 @@ def render_web_app() -> str:
               payload.vision_model || '',
               { allowBlank: true, blankLabel: 'Use default model' }
             );
+            updateContextCapHint();
           }
 
           function renderConnectionsPanel() {
@@ -2898,6 +3598,225 @@ def render_web_app() -> str:
             `;
           }
 
+          function isSettingsOpen() {
+            const modal = document.getElementById('settings-modal');
+            return Boolean(modal && !modal.hidden);
+          }
+
+          function setConversationSettingsStatus(message = '') {
+            const status = document.getElementById('conversation-settings-status');
+            if (status) status.textContent = message;
+          }
+
+          function closeConversationActionMenus() {
+            document.querySelectorAll('.settings-action-menu[open]').forEach((menu) => {
+              menu.open = false;
+            });
+          }
+
+          function conversationRecordById(conversationId) {
+            return (state.settingsConversations || []).find((item) => String(item.id) === String(conversationId))
+              || (state.conversationCache && String(state.conversationCache.id) === String(conversationId) ? state.conversationCache : null);
+          }
+
+          function conversationMessageCountLabel(conversation) {
+            const count = Number(conversation?.message_count ?? (conversation?.messages || []).length ?? 0);
+            return `${count} ${count === 1 ? 'message' : 'messages'}`;
+          }
+
+          function queuedItemsForCurrentConversation() {
+            if (!state.workspaceId || !state.conversationId) return [];
+            const activeWorkspaceId = String(state.workspaceId);
+            const activeConversationId = String(state.conversationId);
+            const reviewMatches =
+              String(state.review?.workspace_id || '') === activeWorkspaceId &&
+              String(state.review?.conversation_id || '') === activeConversationId;
+            if (reviewMatches && Array.isArray(state.review?.queue?.items)) {
+              return state.review.queue.items;
+            }
+            const queuedRuns = Array.isArray(state.runStatus?.queued_runs) ? state.runStatus.queued_runs : [];
+            return queuedRuns.filter((item) =>
+              String(item.workspace_id || '') === activeWorkspaceId &&
+              String(item.conversation_id || '') === activeConversationId
+            );
+          }
+
+          function renderComposerQueue() {
+            const host = document.getElementById('composer-queue');
+            if (!host) return;
+            const queuedItems = queuedItemsForCurrentConversation();
+            if (!queuedItems.length) {
+              host.hidden = true;
+              host.innerHTML = '';
+              return;
+            }
+            const visibleItems = queuedItems.slice(0, 3);
+            const overflow = Math.max(0, queuedItems.length - visibleItems.length);
+            host.hidden = false;
+            host.innerHTML = `
+              <div class="composer-queue-head">
+                <p class="composer-queue-label">Queued Messages</p>
+                <span class="composer-queue-count">${escapeHtml(String(queuedItems.length))} waiting</span>
+              </div>
+              <div class="composer-queue-list">
+                ${visibleItems.map((item) => `
+                  <div class="composer-queue-item">
+                    <span class="composer-queue-index">#${escapeHtml(String(item.position || '?'))}</span>
+                    <span class="composer-queue-preview">${escapeHtml(item.content_preview || 'Queued message')}</span>
+                  </div>
+                `).join('')}
+                ${
+                  overflow > 0
+                    ? `<div class="composer-queue-item"><span class="composer-queue-index">+</span><span class="composer-queue-preview">${escapeHtml(String(overflow))} more queued</span></div>`
+                    : ''
+                }
+              </div>
+            `;
+          }
+
+          function recommendedContextCharCap(provider, model) {
+            const providerText = String(provider || '').trim().toLowerCase();
+            const modelText = String(model || '').trim().toLowerCase();
+            if (providerText === 'codex' || modelText.startsWith('gpt-5') || modelText.includes('codex')) {
+              return 100000;
+            }
+            return 12000;
+          }
+
+          function contextCapSourceLabel(source) {
+            if (source === 'manual') return 'Manual cap';
+            if (source === 'provider-default') return 'Codex default';
+            return 'Default cap';
+          }
+
+          function updateContextCapHint() {
+            const input = document.getElementById('settings-context-char-cap');
+            const hint = document.getElementById('settings-context-char-cap-hint');
+            const provider = document.getElementById('settings-provider')?.value || 'codex';
+            const model = document.getElementById('settings-model')?.value || '';
+            if (!input || !hint) return;
+            const autoCap = recommendedContextCharCap(provider, model);
+            const raw = String(input.value || '').trim();
+            if (!raw) {
+              hint.textContent =
+                `Auto uses ${formatCount(autoCap)} chars for ${provider === 'codex' ? 'Codex/GPT-5' : 'this provider'}.`;
+              return;
+            }
+            const manualCap = Math.max(100, Number(raw) || 0);
+            hint.textContent =
+              `Manual cap: ${formatCount(manualCap)} chars. Auto for this provider/model would be ${formatCount(autoCap)}.`;
+          }
+
+          function renderConversationSettingsPanel(conversations) {
+            const host = document.getElementById('conversation-settings-panel');
+            if (!host) return;
+            if (!state.workspaceId || !state.conversationId) {
+              state.settingsConversations = [];
+              host.innerHTML = '<div class="archived-chat-empty">Choose a workspace to manage its chats.</div>';
+              return;
+            }
+            state.settingsConversations = Array.isArray(conversations) ? conversations : [];
+            const current = conversationRecordById(state.conversationId);
+            if (!current) {
+              host.innerHTML = '<div class="archived-chat-empty">Conversation details are not available yet.</div>';
+              return;
+            }
+            const contextWindow = current.context_window || {};
+            const transcriptChars = Number(contextWindow.transcript_chars || 0);
+            const contextChars = Number(contextWindow.context_chars || 0);
+            const contextCharCap = Math.max(1, Number(contextWindow.context_char_cap || 0));
+            const usagePercent = Math.min(100, Math.round((transcriptChars / contextCharCap) * 100));
+            const summaryActive = Boolean(contextWindow.summary_active);
+            const approxTokens = Number(contextWindow.approx_tokens || 0);
+            const archived = state.settingsConversations.filter((item) => item.is_archived);
+            host.innerHTML = `
+              <div class="conversation-settings-card">
+                <div class="conversation-settings-head">
+                  <div>
+                    <p class="conversation-settings-label">Current Chat</p>
+                    <p class="conversation-settings-title">${escapeHtml(current.title || 'New conversation')}</p>
+                    <p class="conversation-settings-meta">
+                      ${escapeHtml(conversationMessageCountLabel(current))} · Updated ${escapeHtml(formatStamp(current.updated_at))}
+                    </p>
+                  </div>
+                  <details class="settings-action-menu">
+                    <summary>Conversation Actions</summary>
+                    <div class="settings-action-list">
+                      <button type="button" onclick="clearConversation()">Clear Chat</button>
+                      <button type="button" onclick="archiveConversation()">Archive Chat</button>
+                      <button class="settings-danger" type="button" onclick="deleteConversationPermanently()">Delete Permanently</button>
+                    </div>
+                  </details>
+                </div>
+                <div class="conversation-context-card">
+                  <div class="conversation-context-head">
+                    <div>
+                      <p class="conversation-settings-label">Context History</p>
+                      <p class="conversation-settings-title">${escapeHtml(formatCount(transcriptChars))} / ${escapeHtml(formatCount(contextCharCap))} chars</p>
+                      <p class="conversation-settings-meta">
+                        Prompting with ${escapeHtml(formatCount(contextChars))} chars (~${escapeHtml(formatCount(approxTokens))} tokens).
+                      </p>
+                    </div>
+                    <div class="conversation-context-badges">
+                      <span class="conversation-context-badge ${summaryActive ? 'is-active' : ''}">
+                        ${summaryActive ? 'Summary active' : 'Full transcript'}
+                      </span>
+                      <span class="conversation-context-badge">${escapeHtml(contextCapSourceLabel(contextWindow.cap_source))}</span>
+                    </div>
+                  </div>
+                  <div class="conversation-context-meter" aria-hidden="true"><span style="width: ${usagePercent}%;"></span></div>
+                  <p class="conversation-settings-meta">
+                    ${
+                      summaryActive
+                        ? 'Earlier messages are being summarized before they go back into the next Codex prompt.'
+                        : 'This chat is still small enough to send its full transcript directly.'
+                    }
+                  </p>
+                </div>
+                <div>
+                  <p class="conversation-settings-label">Archived Chats</p>
+                  ${
+                    archived.length
+                      ? `<div class="archived-chat-list">${archived.map((conversation) => `
+                          <div class="archived-chat-item">
+                            <div>
+                              <p class="conversation-settings-title">${escapeHtml(conversation.title || 'Archived conversation')}</p>
+                              <p class="conversation-settings-meta">
+                                ${escapeHtml(conversationMessageCountLabel(conversation))} · Archived ${escapeHtml(formatStamp(conversation.archived_at))}
+                              </p>
+                            </div>
+                            <div class="archived-chat-actions">
+                              <button type="button" onclick="restoreArchivedConversation('${escapeHtml(String(conversation.id))}')">Restore</button>
+                              <button class="settings-danger" type="button" onclick="deleteConversationPermanently('${escapeHtml(String(conversation.id))}')">Delete</button>
+                            </div>
+                          </div>
+                        `).join('')}</div>`
+                      : '<div class="archived-chat-empty">No archived chats in this workspace yet.</div>'
+                  }
+                </div>
+              </div>
+            `;
+          }
+
+          async function loadConversationSettings() {
+            const host = document.getElementById('conversation-settings-panel');
+            if (!host) return;
+            if (!state.workspaceId || !state.conversationId) {
+              renderConversationSettingsPanel([]);
+              setConversationSettingsStatus('');
+              return;
+            }
+            host.innerHTML = '<div class="archived-chat-empty">Loading conversation tools…</div>';
+            try {
+              const payload = await fetchJson(
+                `/api/workspaces/${encodeURIComponent(state.workspaceId)}/conversations?include_archived=1`
+              );
+              renderConversationSettingsPanel(payload.conversations || []);
+            } catch (error) {
+              host.innerHTML = `<div class="archived-chat-empty">${escapeHtml(error.message || 'Could not load conversation tools.')}</div>`;
+            }
+          }
+
           function openSettings() {
             const modal = document.getElementById('settings-modal');
             if (!modal) return;
@@ -2908,12 +3827,17 @@ def render_web_app() -> str:
               const status = document.getElementById('settings-status');
               if (status) status.textContent = error.message || 'Could not load settings.';
             });
+            loadConversationSettings().catch((error) => {
+              const host = document.getElementById('conversation-settings-panel');
+              if (host) host.innerHTML = `<div class="archived-chat-empty">${escapeHtml(error.message || 'Could not load conversation tools.')}</div>`;
+            });
             refreshOllamaModels().catch(() => {});
           }
 
           function closeSettings() {
             const modal = document.getElementById('settings-modal');
             if (!modal) return;
+            closeConversationActionMenus();
             modal.hidden = true;
           }
 
@@ -2941,9 +3865,15 @@ def render_web_app() -> str:
             const themeLabel = document.getElementById('studio-theme-label');
             const themePrompt = document.getElementById('studio-theme-prompt');
             const options = STUDIO_TEMPLATES[workspaceKind] || STUDIO_TEMPLATES.studio_game;
+            const currentTemplate = templateSelect?.value || '';
             if (templateSelect) {
               templateSelect.innerHTML = options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('');
+              if (options.some((option) => option.value === currentTemplate)) {
+                templateSelect.value = currentTemplate;
+              }
             }
+            const selectedTemplate = templateSelect?.value || options[0]?.value || '';
+            const defaults = studioTemplateDefaults(workspaceKind, selectedTemplate);
             if (titleLabel) {
               titleLabel.firstChild.textContent =
                 workspaceKind === 'studio_game' ? 'Game name' :
@@ -2955,14 +3885,10 @@ def render_web_app() -> str:
               themeLabel.firstChild.textContent = workspaceKind === 'studio_data' ? 'Focus prompt (optional)' : 'Theme prompt (optional)';
             }
             if (titleInput && !titleInput.value.trim()) {
-              titleInput.placeholder = studioDefaultTitle(workspaceKind);
+              titleInput.placeholder = defaults.title || studioDefaultTitle(workspaceKind, selectedTemplate);
             }
             if (themePrompt && !themePrompt.value.trim()) {
-              themePrompt.placeholder =
-                workspaceKind === 'studio_game' ? 'A playful jungle at sunset with friendly robots.' :
-                workspaceKind === 'studio_web' ? 'A bold launch page for a calm, premium product.' :
-                workspaceKind === 'studio_data' ? 'Revenue data with trust cues, clear trends, and simple charts.' :
-                'Helpful docs with a friendly getting started flow.';
+              themePrompt.placeholder = defaults.theme;
             }
           }
 
@@ -2978,6 +3904,7 @@ def render_web_app() -> str:
               setSelectOptions('settings-builder-model', options, settings.builder_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-reviewer-model', options, settings.reviewer_model || '', { allowBlank: true, blankLabel: 'Use default model' });
               setSelectOptions('settings-vision-model', options, settings.vision_model || '', { allowBlank: true, blankLabel: 'Use default model' });
+              updateContextCapHint();
               if (status) status.textContent = payload.message || `Found ${models.length} model(s).`;
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not fetch Ollama models.';
@@ -2987,6 +3914,7 @@ def render_web_app() -> str:
           async function saveSettings() {
             const status = document.getElementById('settings-status');
             try {
+              const contextCharCapRaw = String(document.getElementById('settings-context-char-cap').value || '').trim();
               const payload = await fetchJson('/api/settings', {
                 method: 'PATCH',
                 headers: { 'content-type': 'application/json' },
@@ -3000,9 +3928,19 @@ def render_web_app() -> str:
                   vision_model: document.getElementById('settings-vision-model').value,
                   max_step_retries: Number(document.getElementById('settings-max-step-retries').value || 2),
                   phase_timeout_seconds: Number(document.getElementById('settings-phase-timeout').value || 240),
+                  context_char_cap: contextCharCapRaw ? Number(contextCharCapRaw) : null,
                 }),
               });
-              if (status) status.textContent = `Saved. Provider: ${payload.provider}, model: ${payload.model}`;
+              if (status) {
+                status.textContent =
+                  `Saved. Provider: ${payload.provider}, model: ${payload.model}, context cap: ${formatCount(payload.resolved_context_char_cap || 0)} chars.`;
+              }
+              updateContextCapHint();
+              if (state.conversationId && state.workspaceId) {
+                state.lastSignature = null;
+                await loadConversationDetail();
+                await loadConversationSettings();
+              }
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not save settings.';
             }
@@ -3260,27 +4198,108 @@ def render_web_app() -> str:
             closeActionsMenu();
           }
 
-          async function clearConversation() {
-            if (!state.workspaceId || !state.conversationId) {
+          async function refreshAfterConversationAction(workspaceId, nextConversationId = null) {
+            state.lastSignature = null;
+            clearComposerAttachments();
+            await loadWorkspaces();
+            await selectWorkspace(workspaceId, nextConversationId);
+          }
+
+          async function clearConversation(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
               window.alert('Choose a workspace first.');
               return;
             }
-            if (!window.confirm('Clear all messages in this workspace chat?')) return;
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Clear "${title}" permanently? This erases its transcript and cannot be undone.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
             try {
-              await fetchJson(`/api/conversations/${encodeURIComponent(state.conversationId)}/clear`, {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/clear`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ workspace_id: state.workspaceId }),
               });
-              state.lastSignature = null;
-              clearComposerAttachments();
-              await loadWorkspaces();
-              await loadConversationDetail();
-              await loadReview();
+              setConversationSettingsStatus('Chat cleared.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || conversationId);
             } catch (error) {
               window.alert(error.message || 'Could not clear chat');
+              setConversationSettingsStatus(error.message || 'Could not clear chat.');
             }
             closeActionsMenu();
+          }
+
+          async function archiveConversation(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Archive "${title}"? Its messages stay stored and you can restore it later from Settings.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/archive`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ workspace_id: state.workspaceId }),
+              });
+              setConversationSettingsStatus('Chat archived.');
+              await refreshAfterConversationAction(
+                state.workspaceId,
+                payload.active_conversation_id || payload.active_conversation?.id || state.conversationId
+              );
+            } catch (error) {
+              window.alert(error.message || 'Could not archive chat');
+              setConversationSettingsStatus(error.message || 'Could not archive chat.');
+            }
+            closeActionsMenu();
+          }
+
+          async function restoreArchivedConversation(conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/restore`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ workspace_id: state.workspaceId }),
+              });
+              setConversationSettingsStatus('Archived chat restored.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || conversationId);
+            } catch (error) {
+              window.alert(error.message || 'Could not restore chat');
+              setConversationSettingsStatus(error.message || 'Could not restore chat.');
+            }
+          }
+
+          async function deleteConversationPermanently(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Delete "${title}" permanently? This removes it from Alcove and cannot be undone.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(
+                `/api/conversations/${encodeURIComponent(conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`,
+                { method: 'DELETE' }
+              );
+              setConversationSettingsStatus('Chat deleted permanently.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || null);
+            } catch (error) {
+              window.alert(error.message || 'Could not delete chat');
+              setConversationSettingsStatus(error.message || 'Could not delete chat.');
+            }
           }
 
           async function refreshStudioPreview() {
@@ -3433,6 +4452,9 @@ def render_web_app() -> str:
               if (refreshThread && state.conversationId) {
                 state.lastSignature = null;
                 await loadConversationDetail();
+              }
+              if (isSettingsOpen() && (refreshWorkspaces || refreshThread)) {
+                await loadConversationSettings();
               }
               if (refreshReview) await loadReview();
             } catch (_) {}
@@ -3958,7 +4980,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             window.location.reload();
           }}
           async function clearChat(workspaceId, conversationId) {{
-            if (!window.confirm('Clear all messages in this chat?')) return;
+            if (!window.confirm('Clear this chat permanently? This erases its transcript and cannot be undone.')) return;
             const response = await fetch(`/api/conversations/${{conversationId}}/clear`, {{
               method: 'POST',
               headers: {{ 'content-type': 'application/json' }},

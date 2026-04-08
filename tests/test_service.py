@@ -96,6 +96,48 @@ def test_service_queues_second_active_run(tmp_path: Path) -> None:
     assert service.get_run_status()["queue_count"] == 0
 
 
+def test_service_clear_conversation_resets_title_and_messages(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    conversation = service.create_conversation("workspace-1", title="Investigate regression")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(conversation["id"]))
+    controller.append_message(role="user", content="Keep this out of the next run")
+    controller.append_message(role="assistant", content="Will do")
+    controller.update_summary(str(conversation["id"]), "Summary to clear")
+
+    cleared = service.clear_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert cleared["id"] == conversation["id"]
+    assert cleared["title"] == "New conversation"
+    assert cleared["messages"] == []
+    assert cleared["summary"] is None
+    assert cleared["active_conversation_id"] == conversation["id"]
+
+
+def test_service_archive_and_restore_conversation_uses_explicit_archive_state(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    conversation = service.create_conversation("workspace-1", title="Quiet launch thread")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(conversation["id"]))
+    controller.append_message(role="user", content="Preserve this conversation")
+
+    archived = service.archive_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert archived["conversation"]["id"] == conversation["id"]
+    assert archived["conversation"]["archived_at"] is not None
+    assert archived["active_conversation_id"] != conversation["id"]
+    assert str(conversation["id"]) not in {item["id"] for item in service.list_conversations("workspace-1")}
+    archived_records = service.list_conversations("workspace-1", include_archived=True)
+    assert str(conversation["id"]) in {item["id"] for item in archived_records if item["is_archived"]}
+
+    restored = service.restore_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert restored["id"] == conversation["id"]
+    assert restored["archived_at"] is None
+    assert restored["active_conversation_id"] == conversation["id"]
+    assert str(conversation["id"]) in {item["id"] for item in service.list_conversations("workspace-1")}
+
+
 def test_recover_run_rejects_when_active(tmp_path: Path) -> None:
     gate = Event()
     service = _make_service(tmp_path, phase_client=FakePhaseClient(gate=gate))
@@ -482,6 +524,21 @@ def test_create_studio_game_scaffolds_preview_and_publish(tmp_path: Path) -> Non
     published = service.publish_studio_game(str(workspace["id"]))
     assert published["publish_state"] == "published"
     assert str(published["publish_url"]).startswith("/play/")
+
+
+def test_create_studio_workspace_defaults_unknown_game_template_to_runner(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    created = service.create_studio_workspace(
+        workspace_kind="studio_game",
+        artifact_title="Night Shift Detective",
+        template_kind="mystery",
+    )
+
+    workspace = created["workspace"]
+    assert workspace["template_kind"] == "runner"
+    game_js = (Path(str(workspace["repo_path"])) / "game.js").read_text(encoding="utf-8")
+    assert "Case Interrupted" in game_js
 
 
 def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: Path) -> None:
