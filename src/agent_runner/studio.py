@@ -25,6 +25,7 @@ STUDIO_TEMPLATES = {
     "studio_web": {
         "landing-page": "Landing Page",
         "web-app": "Web App",
+        "image-lab": "Image Lab",
         "portfolio": "Portfolio",
         "blank": "Blank Start",
     },
@@ -1136,7 +1137,120 @@ root.innerHTML = `
 
 if (statusEl) statusEl.textContent = "Ready to Preview";
 """
+    if kind == "image-lab":
+        return f"""const TITLE = "{title_text}";
+const THEME = "{theme_text}";
+const root = document.getElementById("studio-root");
+const statusEl = document.getElementById("status");
+
+root.innerHTML = `
+  <div class="stack" style="padding:22px;">
+    <section class="card" style="padding:0;overflow:hidden;background:linear-gradient(145deg,#fff7ec 0%,#f4efe7 48%,#efe6d7 100%);">
+      <div style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,0.85fr);gap:0;">
+        <div style="padding:30px 30px 34px;">
+          <div class="hero-chip">Alcove Studio · Image Lab</div>
+          <h1 style="font-size:56px;line-height:0.98;margin:18px 0 14px;max-width:10ch;">${{TITLE}}</h1>
+          <p style="font-size:18px;line-height:1.65;max-width:54ch;margin:0 0 22px;">${{THEME}}</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px;">
+            <div class="hero-chip" style="background:#fff;color:#6f5132;">Prompt-first</div>
+            <div class="hero-chip" style="background:#fff;color:#6f5132;">Variant gallery</div>
+            <div class="hero-chip" style="background:#fff;color:#6f5132;">z-image ready</div>
+          </div>
+          <div class="card" style="padding:18px;background:rgba(255,255,255,0.72);border-color:rgba(111,81,50,0.16);box-shadow:none;">
+            <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#7b644b;margin-bottom:8px;">Prompt</div>
+            <div style="font-size:24px;line-height:1.35;color:#2d241a;">Painterly canyon dusk, cinematic clouds, warm mineral light, crisp silhouette, editorial fantasy poster.</div>
+          </div>
+        </div>
+        <aside style="padding:30px;background:linear-gradient(160deg,#8f5b35 0%,#6d7c65 54%,#2d4d62 100%);color:#fff;display:grid;align-content:space-between;gap:18px;">
+          <div>
+            <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;opacity:0.76;">Session</div>
+            <h2 style="font-size:28px;line-height:1.15;margin:10px 0 12px;">Studio shell for image generation workflows.</h2>
+            <p style="margin:0;line-height:1.6;opacity:0.9;">Use this starter to shape prompts, compare variants, and connect Alcove's chat loop to an external dashboard like ai-art.</p>
+          </div>
+          <div class="stack" style="gap:10px;">
+            <div class="card" style="background:rgba(14,20,26,0.22);color:#fff;border-color:rgba(255,255,255,0.16);box-shadow:none;">
+              <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;opacity:0.72;">Recommended hook-up</div>
+              <div style="font-size:17px;line-height:1.5;margin-top:8px;">Swap the mock run controls for your ai-art dashboard actions, then stream generated assets back into the gallery.</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;">
+              <div class="card" style="background:rgba(255,255,255,0.14);color:#fff;border-color:rgba(255,255,255,0.18);box-shadow:none;padding:14px;">
+                <div style="font-size:12px;opacity:0.72;text-transform:uppercase;letter-spacing:.14em;">Model</div>
+                <strong style="display:block;margin-top:8px;font-size:16px;">z-image</strong>
+              </div>
+              <div class="card" style="background:rgba(255,255,255,0.14);color:#fff;border-color:rgba(255,255,255,0.18);box-shadow:none;padding:14px;">
+                <div style="font-size:12px;opacity:0.72;text-transform:uppercase;letter-spacing:.14em;">Aspect</div>
+                <strong style="display:block;margin-top:8px;font-size:16px;">4:5</strong>
+              </div>
+              <div class="card" style="background:rgba(255,255,255,0.14);color:#fff;border-color:rgba(255,255,255,0.18);box-shadow:none;padding:14px;">
+                <div style="font-size:12px;opacity:0.72;text-transform:uppercase;letter-spacing:.14em;">Batch</div>
+                <strong style="display:block;margin-top:8px;font-size:16px;">4 variants</strong>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+    <section style="display:grid;grid-template-columns:minmax(0,0.95fr) minmax(0,1.05fr);gap:16px;">
+      <article class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+          <div>
+            <div class="hero-chip">Generation Queue</div>
+            <h3 style="font-size:30px;margin:16px 0 10px;">Prompt sets and run controls</h3>
+          </div>
+          <div style="font-size:13px;color:#75624d;">Draft flow</div>
+        </div>
+        <div class="stack" style="gap:12px;">
+          <div class="card" style="padding:16px;background:#fffaf2;border-color:rgba(111,81,50,0.12);box-shadow:none;">
+            <strong style="display:block;font-size:16px;">Hero illustration</strong>
+            <p style="margin:8px 0 0;line-height:1.55;">Generate a lead image for the campaign page, tuned for headline-safe negative space.</p>
+          </div>
+          <div class="card" style="padding:16px;background:#f8fbff;border-color:rgba(57,89,116,0.12);box-shadow:none;">
+            <strong style="display:block;font-size:16px;">Style exploration</strong>
+            <p style="margin:8px 0 0;line-height:1.55;">Compare painterly, graphic, and cinematic directions before committing to one visual voice.</p>
+          </div>
+          <div class="card" style="padding:16px;background:#f6faf5;border-color:rgba(63,95,72,0.12);box-shadow:none;">
+            <strong style="display:block;font-size:16px;">Production handoff</strong>
+            <p style="margin:8px 0 0;line-height:1.55;">Save approved prompts, chosen seeds, and exported filenames so the workflow stays reproducible.</p>
+          </div>
+        </div>
+      </article>
+      <article class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px;">
+          <div>
+            <div class="hero-chip">Variant Gallery</div>
+            <h3 style="font-size:30px;margin:16px 0 8px;">Preview the outputs beside the chat.</h3>
+          </div>
+          <div style="font-size:13px;color:#75624d;">Mock gallery</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;">
+          <div style="aspect-ratio:4 / 5;border-radius:24px;background:linear-gradient(180deg,#f7c98d 0%,#df8352 35%,#53406e 100%);position:relative;overflow:hidden;">
+            <div style="position:absolute;inset:14px;border-radius:18px;background:radial-gradient(circle at 50% 28%,rgba(255,247,218,0.78),transparent 34%),linear-gradient(180deg,transparent 42%,rgba(34,20,44,0.35) 100%);"></div>
+          </div>
+          <div style="aspect-ratio:4 / 5;border-radius:24px;background:linear-gradient(180deg,#9fd3e8 0%,#5d8fb6 42%,#21344b 100%);position:relative;overflow:hidden;">
+            <div style="position:absolute;inset:14px;border-radius:18px;background:radial-gradient(circle at 60% 24%,rgba(248,252,255,0.72),transparent 30%),linear-gradient(180deg,transparent 46%,rgba(8,18,34,0.42) 100%);"></div>
+          </div>
+          <div style="aspect-ratio:4 / 5;border-radius:24px;background:linear-gradient(180deg,#bed6a8 0%,#7f9760 42%,#39452d 100%);position:relative;overflow:hidden;">
+            <div style="position:absolute;inset:14px;border-radius:18px;background:radial-gradient(circle at 42% 22%,rgba(250,245,214,0.7),transparent 32%),linear-gradient(180deg,transparent 48%,rgba(26,39,20,0.42) 100%);"></div>
+          </div>
+          <div style="aspect-ratio:4 / 5;border-radius:24px;background:linear-gradient(180deg,#f0d9bb 0%,#b88763 44%,#5a3550 100%);position:relative;overflow:hidden;">
+            <div style="position:absolute;inset:14px;border-radius:18px;background:radial-gradient(circle at 50% 24%,rgba(255,247,237,0.72),transparent 30%),linear-gradient(180deg,transparent 48%,rgba(38,18,32,0.4) 100%);"></div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </div>
+`;
+
+if (statusEl) statusEl.textContent = "Ready to Preview";
+"""
     layout = {
+        "image-lab": """
+          <section class="card" style="padding:28px;">
+            <div class="hero-chip">Image Lab</div>
+            <h1 style="font-size:48px;margin:18px 0 12px;">${TITLE}</h1>
+            <p style="font-size:18px;line-height:1.55;max-width:52ch;">${THEME}</p>
+          </section>
+        """,
         "portfolio": """
           <section class="card" style="display:grid;grid-template-columns:1.3fr 1fr;gap:20px;padding:28px;">
             <div>

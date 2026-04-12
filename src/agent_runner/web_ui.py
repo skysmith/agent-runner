@@ -2044,6 +2044,7 @@ def render_web_app() -> str:
             studio_web: [
               { value: 'landing-page', label: 'Landing Page' },
               { value: 'web-app', label: 'Web App' },
+              { value: 'image-lab', label: 'Image Lab' },
               { value: 'portfolio', label: 'Portfolio' },
               { value: 'blank', label: 'Blank Start' },
             ],
@@ -2793,6 +2794,12 @@ def render_web_app() -> str:
               };
             }
             if (workspace === 'studio_web') {
+              if (template === 'image-lab') {
+                return {
+                  title: 'Sunset Signal Lab',
+                  theme: 'An image-generation studio for prompt iteration, variant review, and z-image powered art direction.',
+                };
+              }
               return {
                 title: 'New Website',
                 theme: 'A bold launch page for a calm, premium product.',
