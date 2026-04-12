@@ -11,7 +11,7 @@ from .codex_client import CodexError
 from .doctor import render_doctor_report, run_doctor
 from .models import ProviderKind
 from .runner import AgentRunner, RunnerConfig
-from .server_info import server_info
+from .server_info import is_localhost_bind, server_info
 from .service import AgentRunnerService, ServiceConfig
 
 
@@ -270,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         password = (args.password or "").strip() or None
+        try:
+            _require_password_for_public_bind(host=args.host, password=password, command="alcove ui")
+        except ValueError as exc:
+            print(f"[alcove] error: {exc}", file=sys.stderr)
+            return 1
         server = create_server(service, host=args.host, port=args.port, access_password=password)
         info = server_info(args.host, server.server_port)
         print(f"[alcove] Web runtime started on {info['bind_host']}:{info['bind_port']}")
@@ -282,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[alcove] Tailscale URL: {info['tailscale_url']}")
         if password:
             print("[alcove] Access password is enabled.")
+            if not info.get("localhost_only"):
+                print("[alcove] Public bind is protected with basic auth.")
         if info.get("localhost_only"):
             print("[alcove] Note: bound to localhost only (LAN devices cannot connect).")
         try:
@@ -317,6 +324,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         password = (args.password or "").strip() or None
+        try:
+            _require_password_for_public_bind(
+                host=args.host,
+                password=password,
+                command=f"alcove {args.command}",
+            )
+        except ValueError as exc:
+            print(f"[alcove] error: {exc}", file=sys.stderr)
+            return 1
         server = create_server(service, host=args.host, port=args.port, access_password=password)
         info = server_info(args.host, server.server_port)
         print(f"[alcove] Web runtime started on {info['bind_host']}:{info['bind_port']}")
@@ -329,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[alcove] Tailscale URL: {info['tailscale_url']}")
         if password:
             print("[alcove] Access password is enabled.")
+            if not info.get("localhost_only"):
+                print("[alcove] Public bind is protected with basic auth.")
         if info.get("localhost_only"):
             print("[alcove] Note: bound to localhost only (LAN devices cannot connect).")
         try:
@@ -346,6 +364,18 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 2
+
+
+def _require_password_for_public_bind(*, host: str, password: str | None, command: str) -> None:
+    host_text = str(host or "").strip() or "0.0.0.0"
+    if is_localhost_bind(host_text):
+        return
+    if str(password or "").strip():
+        return
+    raise ValueError(
+        f"{command} requires --password whenever --host is not localhost. "
+        "Use --host 127.0.0.1 for local-only access, or pass --password to protect remote access."
+    )
 
 
 if __name__ == "__main__":

@@ -1123,7 +1123,13 @@ class WorkspacePane:
         record = self.controller.active_conversation()
         if record.id != conversation_id:
             return
-        summary = self.app.context_assembler.refresh_summary(record)
+        provider, model, _, _ = self._effective_run_settings()
+        summary = self.app.context_assembler.refresh_summary(
+            record,
+            provider=provider,
+            model=model,
+            configured_context_char_cap=self.app_settings.context_char_cap,
+        )
         if summary != record.summary:
             self.controller.update_summary(conversation_id, summary)
 
@@ -2107,6 +2113,7 @@ class WorkspaceApp:
                 animate_status_scenes=bool(animate_var.get()),
                 max_step_retries=max(0, default_loop_count - 1),
                 phase_timeout_seconds=max(1, int(timeout_var.get().strip() or "1")),
+                context_char_cap=old_settings.context_char_cap,
                 default_checks=checks,
             )
             save_app_settings(self.settings_path, self.app_settings)

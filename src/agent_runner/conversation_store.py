@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,7 @@ class ConversationStore:
         if not isinstance(raw, dict):
             return WorkspaceSessionState(workspace_id=workspace_id)
         return WorkspaceSessionState(
-            workspace_id=str(raw.get("workspace_id", workspace_id)),
+            workspace_id=workspace_id,
             active_conversation_id=_optional_text(raw.get("active_conversation_id")),
             conversation_ids=_as_string_list(raw.get("conversation_ids")),
             conversations_panel_collapsed=bool(raw.get("conversations_panel_collapsed", False)),
@@ -100,6 +101,12 @@ class ConversationStore:
         except FileNotFoundError:
             return
 
+    def workspace_exists(self, workspace_id: str) -> bool:
+        return self._workspace_dir(workspace_id).exists()
+
+    def delete_workspace(self, workspace_id: str) -> None:
+        shutil.rmtree(self._workspace_dir(workspace_id), ignore_errors=True)
+
     def create_conversation(self, workspace_id: str, *, title: str = DEFAULT_CONVERSATION_TITLE) -> ConversationRecord:
         now = _timestamp_now()
         return ConversationRecord(
@@ -131,7 +138,7 @@ class ConversationStore:
         return state
 
     def _workspace_dir(self, workspace_id: str) -> Path:
-        return self.root / workspace_id
+        return self.root / _validated_storage_name(workspace_id, label="Workspace id")
 
     def _workspace_state_path(self, workspace_id: str) -> Path:
         return self._workspace_dir(workspace_id) / "workspace_state.json"
@@ -140,7 +147,8 @@ class ConversationStore:
         return self._workspace_dir(workspace_id) / "conversations"
 
     def _conversation_path(self, workspace_id: str, conversation_id: str) -> Path:
-        return self._conversations_dir(workspace_id) / f"{conversation_id}.json"
+        safe_conversation_id = _validated_storage_name(conversation_id, label="Conversation id")
+        return self._conversations_dir(workspace_id) / f"{safe_conversation_id}.json"
 
     def _atomic_write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,8 +167,11 @@ class WorkspaceConversationController:
         }
         self._normalize_after_load()
 
-    def metadata(self) -> list[ConversationRecord]:
-        return [self._records[cid] for cid in self.state.conversation_ids if cid in self._records]
+    def metadata(self, *, include_archived: bool = False) -> list[ConversationRecord]:
+        records = [self._records[cid] for cid in self.state.conversation_ids if cid in self._records]
+        if include_archived:
+            return records
+        return [record for record in records if not record.archived_at]
 
     def reload(self) -> None:
         self.state = self.store.ensure_workspace(self.workspace_id)
@@ -171,7 +182,7 @@ class WorkspaceConversationController:
 
     def active_conversation(self) -> ConversationRecord:
         active_id = self.state.active_conversation_id
-        if active_id and active_id in self._records:
+        if active_id and active_id in self._records and not self._records[active_id].archived_at:
             return self._records[active_id]
         self._normalize_after_load()
         return self._records[self.state.active_conversation_id]
@@ -254,6 +265,8 @@ class WorkspaceConversationController:
     def select_conversation(self, conversation_id: str) -> ConversationRecord:
         if conversation_id not in self._records:
             raise KeyError(conversation_id)
+        if self._records[conversation_id].archived_at:
+            raise ValueError("Archived conversations must be restored before they can become active.")
         self.state.active_conversation_id = conversation_id
         self.store.save_workspace_state(self.state)
         return self._records[conversation_id]
@@ -272,15 +285,16 @@ class WorkspaceConversationController:
         was_active = self.state.active_conversation_id == conversation_id
         self.store.delete_conversation(self.workspace_id, conversation_id)
         self._records.pop(conversation_id, None)
-        self.state.conversation_ids = [cid for cid in self.state.conversation_ids if cid != conversation_id]
-        if not self.state.conversation_ids:
+        self._resort_state()
+        fallback_id = self._first_active_conversation_id()
+        if fallback_id is None:
             fallback = self.store.create_conversation(self.workspace_id)
             self._records[fallback.id] = fallback
-            self.state.conversation_ids = [fallback.id]
-            self.state.active_conversation_id = fallback.id
             self.store.save_conversation(fallback)
-        elif was_active or self.state.active_conversation_id not in self._records:
-            self.state.active_conversation_id = self.state.conversation_ids[0]
+            self._resort_state()
+            fallback_id = fallback.id
+        if was_active or self.state.active_conversation_id not in self._records:
+            self.state.active_conversation_id = fallback_id
         self.store.save_workspace_state(self.state)
         return self.active_conversation()
 
@@ -288,9 +302,46 @@ class WorkspaceConversationController:
         if conversation_id not in self._records:
             raise KeyError(conversation_id)
         record = self._records[conversation_id]
+        if record.archived_at:
+            raise ValueError("Archived conversations must be restored before they can be cleared.")
+        record.title = DEFAULT_CONVERSATION_TITLE
         record.messages = []
         record.summary = None
         record.updated_at = _timestamp_now()
+        self._save_record(record)
+        return record
+
+    def archive_conversation(self, conversation_id: str) -> tuple[ConversationRecord, ConversationRecord]:
+        if conversation_id not in self._records:
+            raise KeyError(conversation_id)
+        record = self._records[conversation_id]
+        if record.archived_at:
+            return record, self.active_conversation()
+        archived_at = _timestamp_now()
+        record.archived_at = archived_at
+        record.updated_at = archived_at
+        self._records[record.id] = record
+        self._resort_state()
+        fallback_id = self._first_active_conversation_id()
+        if self.state.active_conversation_id == conversation_id or self.state.active_conversation_id not in self._records:
+            if fallback_id is None:
+                fallback = self.store.create_conversation(self.workspace_id)
+                self._records[fallback.id] = fallback
+                self.store.save_conversation(fallback)
+                self._resort_state()
+                fallback_id = fallback.id
+            self.state.active_conversation_id = fallback_id
+        self.store.save_conversation(record)
+        self.store.save_workspace_state(self.state)
+        return record, self.active_conversation()
+
+    def restore_conversation(self, conversation_id: str) -> ConversationRecord:
+        if conversation_id not in self._records:
+            raise KeyError(conversation_id)
+        record = self._records[conversation_id]
+        record.archived_at = None
+        record.updated_at = _timestamp_now()
+        self.state.active_conversation_id = record.id
         self._save_record(record)
         return record
 
@@ -374,9 +425,26 @@ class WorkspaceConversationController:
             self._records[record.id] = record
             self.store.save_conversation(record)
         self._resort_state()
-        if self.state.active_conversation_id not in self._records:
-            self.state.active_conversation_id = self.state.conversation_ids[0]
+        if (
+            self.state.active_conversation_id not in self._records
+            or self._records[self.state.active_conversation_id].archived_at
+        ):
+            fallback_id = self._first_active_conversation_id()
+            if fallback_id is None:
+                record = self.store.create_conversation(self.workspace_id)
+                self._records[record.id] = record
+                self.store.save_conversation(record)
+                self._resort_state()
+                fallback_id = record.id
+            self.state.active_conversation_id = fallback_id
         self.store.save_workspace_state(self.state)
+
+    def _first_active_conversation_id(self) -> str | None:
+        for conversation_id in self.state.conversation_ids:
+            record = self._records.get(conversation_id)
+            if record and not record.archived_at:
+                return conversation_id
+        return None
 
 
 def derive_conversation_title(message_text: str, max_len: int = 60) -> str:
@@ -434,8 +502,8 @@ def _conversation_from_json(raw: dict[str, Any], *, conversation_id: str, worksp
                 )
             )
     return ConversationRecord(
-        id=str(raw.get("id") or conversation_id),
-        workspace_id=str(raw.get("workspace_id") or workspace_id),
+        id=conversation_id,
+        workspace_id=workspace_id,
         title=str(raw.get("title") or DEFAULT_CONVERSATION_TITLE),
         created_at=str(raw.get("created_at") or _timestamp_now()),
         updated_at=str(raw.get("updated_at") or _timestamp_now()),
@@ -443,6 +511,7 @@ def _conversation_from_json(raw: dict[str, Any], *, conversation_id: str, worksp
         page_context=_object_dict(raw.get("page_context")),
         summary=_optional_text(raw.get("summary")),
         messages=messages,
+        archived_at=_optional_text(raw.get("archived_at")),
     )
 
 
@@ -451,6 +520,19 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _validated_storage_name(value: object, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty.")
+    if text in {".", ".."}:
+        raise ValueError(f"{label} cannot be '.' or '..'.")
+    if any(ch in text for ch in ("/", "\\", "\x00")):
+        raise ValueError(f"{label} cannot contain path separators.")
+    if any(ord(ch) < 32 for ch in text):
+        raise ValueError(f"{label} cannot contain control characters.")
+    return text
 
 
 def _as_string_list(value: object) -> list[str]:

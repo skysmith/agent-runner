@@ -8,9 +8,12 @@ from agent_runner.macos_wrapper import (
     LaunchAgentManager,
     LaunchAgentSpec,
     MacOSWrapperBridge,
+    capture_native_speech,
     install_open_in_alcove_quick_action,
     launch_agent_label,
     load_wrapper_state,
+    native_speech_available,
+    native_speech_helper_path,
     open_browser_for_state,
     prune_stale_launch_agents,
     save_wrapper_state,
@@ -140,6 +143,48 @@ def test_open_browser_for_state_prefers_current_workspace(monkeypatch, tmp_path:
 
     assert result == "http://127.0.0.1:8765?workspace_id=active-workspace&conversation_id=active-conversation"
     assert opened == [result]
+
+
+def test_native_speech_helper_uses_app_bundle_path(tmp_path: Path) -> None:
+    app_bundle = tmp_path / "Alcove.app"
+    helper = app_bundle / "Contents" / "MacOS" / "AlcoveNativeSpeech"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("", encoding="utf-8")
+    helper.chmod(0o755)
+
+    resolved = native_speech_helper_path(app_bundle=app_bundle)
+
+    assert resolved == helper.resolve()
+    assert native_speech_available(app_bundle=app_bundle) is True
+
+
+def test_capture_native_speech_runs_helper_and_parses_output(tmp_path: Path) -> None:
+    app_bundle = tmp_path / "Alcove.app"
+    helper = app_bundle / "Contents" / "MacOS" / "AlcoveNativeSpeech"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("", encoding="utf-8")
+    helper.chmod(0o755)
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"transcript":"hello there","locale":"en-US"}\n',
+            stderr="",
+        )
+
+    payload = capture_native_speech(
+        app_bundle=app_bundle,
+        locale="en-US",
+        runner=fake_run,
+    )
+
+    assert calls == [[str(helper.resolve()), "--locale", "en-US"]]
+    assert payload["transcript"] == "hello there"
+    assert payload["provider"] == "macos-native"
 
 
 def test_wrapper_bridge_updates_state_and_open_target(monkeypatch, tmp_path: Path) -> None:

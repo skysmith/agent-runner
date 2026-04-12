@@ -1,7 +1,7 @@
 # Alcove Unified Studio Roadmap
 
-Updated: April 5, 2026  
-Repo: `/Users/sky/Documents/codex/agent-runner`
+Updated: April 7, 2026  
+Repo: `/Users/sky/Documents/codex/lab/scratchpad/agent-runner-fresh-onboarding`
 
 ## Product summary
 
@@ -41,6 +41,23 @@ Initial studio roadmap:
 - `studio_docs`
 
 These should all reuse the same platform ideas rather than becoming separate products with separate architectures.
+
+## Current implementation status
+
+The roadmap has now moved from naming-only direction into a real baseline implementation.
+
+- public Studio creation now covers:
+  - `studio_game`
+  - `studio_web`
+  - `studio_data`
+  - `studio_docs`
+- the browser shell now treats one durable chat as the default unit per workspace
+- workspaces can be imported from folders, renamed, and removed from Alcove without touching repo files on disk
+- Studio workspaces share preview/publish metadata and a common right-pane shell
+- the packaged macOS app now includes a menu-bar helper, native speech-to-text, and folder import from Finder, the Dock icon, and the toolbar icon
+- public web binds now require a password, so remote-serving defaults are harder to misuse
+
+That means several roadmap items have moved from “define this pattern” into “polish and unify this pattern.”
 
 ## Shared Studio Platform
 
@@ -111,6 +128,11 @@ The second flagship studio.
 - ideal for landing pages, small apps, UI iteration, and previewable repo work
 - should reuse most of the Game Studio preview/publish scaffolding
 
+Status:
+
+- baseline shipped
+- now needs polish, stronger share/export surfaces, and clearer preview failure handling
+
 Why second:
 
 - biggest practical audience
@@ -133,6 +155,11 @@ Requirements:
 - preserve undo or re-run story
 - default to non-destructive output
 
+Status:
+
+- workspace kind and baseline Studio shell shipped
+- trust cues, derived-output clarity, and export rules still need maturation
+
 ### Docs Studio
 
 Rendered docs and publishing workflows.
@@ -141,6 +168,11 @@ Rendered docs and publishing workflows.
 - strong fit for landing pages, tutorials, guides, and docs sites
 - publish/export is more important than runtime interactivity
 - should benefit from preview/publish infrastructure already built for Web Studio
+
+Status:
+
+- workspace kind and baseline Studio shell shipped
+- publish/export expectations and docs-specific polish are still roadmap work
 
 ## Finance Drawer roadmap
 

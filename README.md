@@ -2,6 +2,42 @@
 
 Calm, repo-scoped control for Codex, built around visible artifacts.
 
+Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built.
+
+It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
+
+## At a glance
+
+- browser-first Codex workspace for local repos
+- one durable thread per workspace instead of a pile of disconnected prompts
+- live artifact preview beside the chat
+- explicit review output, checks, changed files, and build status
+- mobile companion flow at `/m`
+- studio modes for games, websites, docs, and data work
+
+## Screenshots
+
+![Alcove Web Studio showing chat on the left and a live landing page preview on the right](docs/images/quiet-launch-studio.png)
+
+_Web Studio: steer the artifact from the conversation while the preview stays visible._
+
+![Alcove Game Studio showing chat on the left and a live game preview on the right](docs/images/storybook-station-studio.png)
+
+_Game Studio: the same shell, but for playable artifacts and preview-first iteration._
+
+![Alcove Game Studio showing a live run in progress while the game preview stays visible](docs/images/detective-running-studio.png)
+
+_A real Game Studio session in motion: conversation, run state, and live preview all stay in the same frame._
+
+## Feedback Wanted
+
+If you poke around and have reactions, the most useful feedback is:
+
+- would you actually prefer this over a terminal-only Codex loop for any kind of work?
+- which workspace or studio mode feels most real right now?
+- what feels compelling versus overbuilt?
+- what would you want to see before trusting this for daily use?
+
 ## Open Source Status
 
 Alcove is still early, but this repo is intended to be usable in public:
@@ -11,7 +47,7 @@ Alcove is still early, but this repo is intended to be usable in public:
 - tests should be green before release cuts
 - internal roadmap docs are kept in-repo for product context, not as polished public docs
 
-If you are landing here for the first time, start with the dev quickstart below.
+If you are landing here for the first time, start with the dev quickstart below. If you want outreach copy for sharing the project, see `docs/community-feedback-posts.md`.
 
 ## Quickstart
 
@@ -46,10 +82,6 @@ alcove doctor
 ```
 
 During the transition, the older `agent-runner` command name and `./agent-runner.command` launcher still work as compatibility aliases.
-
-Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
-
-It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
 
 ## Product Shape
 

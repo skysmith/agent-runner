@@ -7,7 +7,7 @@ import subprocess
 import threading
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 from agent_runner.app_paths import DEFAULT_ARTIFACTS_DIR, resolve_runtime_paths
 from agent_runner.http_api import create_server
@@ -16,12 +16,14 @@ from agent_runner.macos_wrapper import (
     LaunchAgentSpec,
     MacOSWrapperBridge,
     app_bundle_path,
+    capture_native_speech,
     copy_connection_url,
     install_open_in_alcove_quick_action,
     is_macos,
     launch_agent_label,
     launch_agent_path,
     load_wrapper_state,
+    native_speech_available,
     local_api_request,
     open_browser_for_state,
     open_url,
@@ -59,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(_launcher_args(argv))
     wrapper_executable = _wrapper_executable_path()
     wrapper_bundle = _wrapper_app_bundle(wrapper_executable)
     requested_repo = _requested_repo_path(wrapper_bundle)
@@ -130,7 +132,26 @@ def _run_service_mode(
     open_browser: bool = False,
 ) -> int:
     service = _build_service(runtime)
-    server = create_server(service, host=host, port=port, access_password=password)
+    native_transcriber = None
+    if wrapper_bundle is not None and is_macos() and native_speech_available(
+        app_bundle=wrapper_bundle,
+        executable_path=wrapper_executable,
+    ):
+        def _transcribe_native(locale: str | None = None) -> dict[str, Any]:
+            return capture_native_speech(
+                app_bundle=wrapper_bundle,
+                executable_path=wrapper_executable,
+                locale=locale,
+            )
+
+        native_transcriber = _transcribe_native
+    server = create_server(
+        service,
+        host=host,
+        port=port,
+        access_password=password,
+        native_transcriber=native_transcriber,
+    )
     info = _server_payload(host, server.server_port, repo_path=runtime.repo_path)
     bridge = MacOSWrapperBridge(
         state_root=runtime.settings_path.parent,
@@ -270,7 +291,16 @@ def _run_control_action(
     if action == "open-browser":
         return 0 if open_browser_for_state(state_root, prefer_current_workspace=False) else 1
     if action == "open-current-workspace":
-        return 0 if open_browser_for_state(state_root, prefer_current_workspace=True) else 1
+        workspace_path = _current_workspace_folder(
+            runtime_repo=runtime_repo,
+            state_root=state_root,
+            port=port,
+            password=password,
+        )
+        if workspace_path is None:
+            return 1
+        open_url(str(workspace_path))
+        return 0
     if action == "restart-service":
         if wrapper_bundle is None:
             return 1
@@ -370,15 +400,33 @@ def _requested_repo_path(app_bundle: Path | None) -> Path | None:
     return Path(repo_env).expanduser()
 
 
+def _launcher_args(argv: list[str] | None) -> list[str]:
+    raw_args = list(argv if argv is not None else os.sys.argv[1:])
+    return [arg for arg in raw_args if not str(arg).startswith("-psn_")]
+
+
 def _first_folder_target(targets: list[str]) -> Path | None:
     for raw in targets:
-        text = raw.strip()
-        if not text:
+        candidate = _folder_target_path(raw)
+        if candidate is None:
             continue
-        candidate = Path(text).expanduser()
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None
+
+
+def _folder_target_path(raw: str) -> Path | None:
+    text = str(raw or "").strip()
+    if not text or text.startswith("-psn_"):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme.lower() == "file":
+        target = unquote(parsed.path or "")
+        netloc = parsed.netloc.strip()
+        if netloc and netloc.lower() not in {"localhost", "127.0.0.1"}:
+            target = f"//{parsed.netloc}{target}"
+        text = target
+    return Path(text).expanduser()
 
 
 def _launch_menu_bar_helper(app_bundle: Path) -> None:
@@ -426,6 +474,46 @@ def _browser_url(*, base_url: str, workspace_id: str | None, conversation_id: st
     if not params:
         return base_url
     return f"{base_url}?{urlencode(params)}"
+
+
+def _current_workspace_folder(
+    *,
+    runtime_repo: Path,
+    state_root: Path,
+    port: int,
+    password: str | None,
+) -> Path | None:
+    payload = load_wrapper_state(state_root)
+    run_status = payload.get("run_status") or {}
+    workspace_id = None
+    if isinstance(run_status, dict):
+        workspace_id = str(run_status.get("workspace_id") or "").strip() or None
+    if not workspace_id:
+        workspace_id = str(payload.get("preferred_workspace_id") or "").strip() or None
+
+    if workspace_id:
+        try:
+            info = wait_for_server(
+                base_url=f"http://127.0.0.1:{port}",
+                password=password,
+                expected_repo=runtime_repo,
+                timeout_seconds=4.0,
+            )
+            workspace = local_api_request(
+                base_url=str(info["localhost_url"]),
+                path=f"/api/workspaces/{quote(workspace_id, safe='')}",
+                password=password,
+            )
+            repo_text = str(workspace.get("repo_path") or "").strip()
+            if repo_text:
+                return Path(repo_text).expanduser()
+        except Exception:
+            pass
+
+    repo_text = str(payload.get("repo_path") or "").strip()
+    if repo_text:
+        return Path(repo_text).expanduser()
+    return runtime_repo.expanduser()
 
 
 if __name__ == "__main__":

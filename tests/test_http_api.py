@@ -11,7 +11,7 @@ from threading import Event
 from pathlib import Path
 
 from agent_runner.codex_client import CodexExecResult
-from agent_runner.http_api import create_server
+from agent_runner.http_api import MAX_JSON_BODY_BYTES, create_server
 from agent_runner.models import ProviderKind
 from agent_runner.service import AgentRunnerService, ServiceConfig
 
@@ -164,6 +164,34 @@ def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> N
         )
         assert isinstance(active["repositories"], list)
         assert any(item["repo_path"] == str(repo) for item in active["repositories"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_can_be_renamed_and_deleted_via_api(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    service.create_conversation("workspace-1", title="Desktop thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        renamed = _patch_json(
+            f"{base}/api/workspaces/workspace-1",
+            {
+                "display_name": "Fresh Onboarding",
+            },
+        )
+        assert renamed["id"] == "workspace-1"
+        assert renamed["display_name"] == "Fresh Onboarding"
+
+        deleted = _delete_json(f"{base}/api/workspaces/workspace-1")
+        assert deleted["ok"] is True
+        assert deleted["workspace_id"] == "workspace-1"
+
+        remaining = _get_json(f"{base}/api/workspaces")
+        assert "workspace-1" not in [workspace["id"] for workspace in remaining["workspaces"]]
     finally:
         server.shutdown()
         server.server_close()
@@ -376,6 +404,7 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         settings = _get_json(f"{base}/api/settings")
         assert settings["provider"] in {"codex", "ollama"}
         assert settings["codex_bin"] == "codex"
+        assert settings["resolved_context_char_cap"] == 100000
         updated = _patch_json(
             f"{base}/api/settings",
             {
@@ -387,12 +416,15 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
                 "vision_model": "qwen3-vl:4b",
                 "max_step_retries": 3,
                 "phase_timeout_seconds": 180,
+                "context_char_cap": 150000,
             },
         )
         assert updated["provider"] == "ollama"
         assert updated["model"] == "llama3.1:8b"
         assert updated["planner_model"] == "qwen2.5:7b"
         assert updated["vision_model"] == "qwen3-vl:4b"
+        assert updated["context_char_cap"] == 150000
+        assert updated["resolved_context_char_cap"] == 150000
         models = _get_json(f"{base}/api/providers/ollama/models")
         assert "available" in models and "models" in models and "message" in models
     finally:
@@ -619,8 +651,10 @@ def test_clear_chat_endpoint_resets_messages(tmp_path: Path) -> None:
             {"workspace_id": "workspace-1"},
         )
         assert cleared["id"] == created["id"]
+        assert cleared["title"] == "New conversation"
         assert cleared["messages"] == []
         conversation = _get_json(f"{base}/api/conversations/{created['id']}?workspace_id=workspace-1")
+        assert conversation["title"] == "New conversation"
         assert conversation["messages"] == []
     finally:
         server.shutdown()
@@ -663,6 +697,41 @@ def test_password_protected_server_requires_basic_auth(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_workspace_define_rejects_unsafe_workspace_id(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    outside_workspace = tmp_path / "outside-workspace"
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        request = urllib.request.Request(
+            f"{base}/api/workspaces",
+            data=json.dumps(
+                {
+                    "id": "../../outside-workspace",
+                    "display_name": "Oops",
+                    "repo_path": str(tmp_path),
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+            payload = json.loads(exc.read().decode("utf-8"))
+            assert "path separators" in payload["detail"].lower()
+        else:
+            raise AssertionError("Expected unsafe workspace id to be rejected")
+
+        assert not outside_workspace.exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_server_info_includes_local_token_when_repo_dirty(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     (tmp_path / "README.md").write_text("dirty\n")
@@ -690,6 +759,41 @@ def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default
         assert payload["local_url"].startswith("http://127.0.0.1:")
         assert payload["phone_enabled"] is False
         assert payload["phone_url"] is None
+        assert payload["native_transcription_available"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_native_transcription_endpoint_uses_wrapper_callable(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    requested_locales: list[str | None] = []
+
+    def transcribe(locale: str | None) -> dict[str, object]:
+        requested_locales.append(locale)
+        return {
+            "transcript": "ship the fix",
+            "locale": locale or "en-US",
+            "provider": "macos-native",
+        }
+
+    server = create_server(service, "127.0.0.1", 0, native_transcriber=transcribe)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        info = _get_json(f"{base}/api/server-info")
+        assert info["native_transcription_available"] is True
+        assert info["native_transcription_provider"] == "macos-wrapper"
+
+        payload = _post_json(
+            f"{base}/api/native/transcribe",
+            {"locale": "en-US"},
+        )
+        assert payload["transcript"] == "ship the fix"
+        assert payload["provider"] == "macos-native"
+        assert requested_locales == ["en-US"]
     finally:
         server.shutdown()
         server.server_close()
@@ -798,6 +902,82 @@ def test_message_endpoint_rejects_loop_mode_without_dev_capability(tmp_path: Pat
         server.server_close()
 
 
+def test_message_endpoint_rejects_oversized_json_body(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_conversation("workspace-1", title="Large request thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = {
+            "workspace_id": "workspace-1",
+            "mode": "message",
+            "content": "x" * MAX_JSON_BODY_BYTES,
+        }
+        request = urllib.request.Request(
+            f"{base}/api/conversations/{created['id']}/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 413
+            response = json.loads(exc.read().decode("utf-8"))
+            assert "too large" in response["detail"].lower()
+        except urllib.error.URLError as exc:
+            # urllib may surface an early 413-style rejection as a broken pipe because
+            # the server closes the connection before the full oversized body is sent.
+            assert "broken pipe" in str(exc).lower()
+        else:
+            raise AssertionError("Expected oversized body to be rejected")
+        assert service.get_conversation(str(created["id"]), workspace_id="workspace-1")["messages"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_archive_and_restore_endpoints_expose_archived_threads(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_conversation("workspace-1", title="Archive me")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(created["id"]))
+    controller.append_message(role="user", content="Keep this transcript")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        archived = _post_json(
+            f"{base}/api/conversations/{created['id']}/archive",
+            {"workspace_id": "workspace-1"},
+        )
+        assert archived["conversation"]["archived_at"] is not None
+        assert archived["active_conversation_id"] != created["id"]
+
+        visible = _get_json(f"{base}/api/workspaces/workspace-1/conversations")
+        assert str(created["id"]) not in {item["id"] for item in visible["conversations"]}
+
+        all_conversations = _get_json(f"{base}/api/workspaces/workspace-1/conversations?include_archived=1")
+        archived_items = [item for item in all_conversations["conversations"] if item["id"] == str(created["id"])]
+        assert archived_items
+        assert archived_items[0]["is_archived"] is True
+
+        restored = _post_json(
+            f"{base}/api/conversations/{created['id']}/restore",
+            {"workspace_id": "workspace-1"},
+        )
+        assert restored["id"] == created["id"]
+        assert restored["active_conversation_id"] == created["id"]
+        assert restored["archived_at"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def _init_git_repo(tmp_path: Path) -> None:
     tmp_path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
@@ -860,6 +1040,12 @@ def _patch_json(url: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="PATCH",
     )
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _delete_json(url: str) -> dict:
+    request = urllib.request.Request(url, method="DELETE")
     with urllib.request.urlopen(request) as response:
         return json.loads(response.read().decode("utf-8"))
 

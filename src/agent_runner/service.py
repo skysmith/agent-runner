@@ -151,15 +151,15 @@ class AgentRunnerService:
         active = controller.active_conversation()
         return self._workspace_payload(controller, updated_at=active.updated_at)
 
-    def list_conversations(self, workspace_id: str) -> list[dict[str, object]]:
+    def list_conversations(self, workspace_id: str, *, include_archived: bool = False) -> list[dict[str, object]]:
         controller = self._controller(workspace_id)
-        return [self._record_payload(record) for record in controller.metadata()]
+        return [self._record_payload(record) for record in controller.metadata(include_archived=include_archived)]
 
-    def list_all_conversations(self) -> list[dict[str, object]]:
+    def list_all_conversations(self, *, include_archived: bool = False) -> list[dict[str, object]]:
         conversations: list[dict[str, object]] = []
         for workspace in self.list_workspaces():
             workspace_id = str(workspace["id"])
-            conversations.extend(self.list_conversations(workspace_id))
+            conversations.extend(self.list_conversations(workspace_id, include_archived=include_archived))
         conversations.sort(
             key=lambda record: (
                 str(record.get("updated_at", "")),
@@ -435,10 +435,46 @@ class AgentRunnerService:
         )
         return self.ensure_workspace(workspace_id)
 
+    def rename_workspace(self, workspace_id: str, *, display_name: str) -> dict[str, object]:
+        controller = self._require_workspace_controller(workspace_id)
+        controller.set_workspace_profile(display_name=display_name)
+        active = controller.active_conversation()
+        payload = self._workspace_payload(controller, updated_at=active.updated_at, title=active.title)
+        self._emit_event(
+            "workspace.updated",
+            {
+                "workspace_id": workspace_id,
+                "display_name": payload.get("display_name"),
+            },
+        )
+        return payload
+
+    def delete_workspace(self, workspace_id: str) -> dict[str, object]:
+        self._require_workspace_controller(workspace_id)
+        status = self.coordinator.get_status()
+        if status.workspace_id == workspace_id and status.state in {"starting", "running", "stopping"}:
+            raise RuntimeError("Stop the active run before deleting this workspace.")
+        with self._queue_lock:
+            if any(item.workspace_id == workspace_id for item in self._pending_runs):
+                raise RuntimeError("Remove or finish queued work before deleting this workspace.")
+        self.conversation_store.delete_workspace(workspace_id)
+        self._emit_event(
+            "workspace.deleted",
+            {
+                "workspace_id": workspace_id,
+            },
+        )
+        return {
+            "ok": True,
+            "workspace_id": workspace_id,
+            "deleted": True,
+        }
+
     def get_conversation(self, conversation_id: str, *, workspace_id: str | None = None) -> dict[str, object]:
         record, resolved_workspace_id = self._find_conversation(conversation_id, workspace_id=workspace_id)
         controller = self._controller(resolved_workspace_id)
-        controller.select_conversation(record.id)
+        if not record.archived_at:
+            controller.select_conversation(record.id)
         return self._record_payload(record, include_messages=True)
 
     def rename_conversation(self, conversation_id: str, *, workspace_id: str | None, title: str) -> dict[str, object]:
@@ -467,7 +503,9 @@ class AgentRunnerService:
                 "fallback_conversation_id": fallback.id,
             },
         )
-        return self._record_payload(fallback)
+        payload = self._record_payload(fallback)
+        payload["active_conversation_id"] = fallback.id
+        return payload
 
     def clear_conversation(self, conversation_id: str, *, workspace_id: str | None = None) -> dict[str, object]:
         record, resolved_workspace_id = self._find_conversation(conversation_id, workspace_id=workspace_id)
@@ -481,7 +519,43 @@ class AgentRunnerService:
                 "cleared": True,
             },
         )
-        return self._record_payload(cleared, include_messages=True)
+        payload = self._record_payload(cleared, include_messages=True)
+        payload["active_conversation_id"] = cleared.id
+        return payload
+
+    def archive_conversation(self, conversation_id: str, *, workspace_id: str | None = None) -> dict[str, object]:
+        record, resolved_workspace_id = self._find_conversation(conversation_id, workspace_id=workspace_id)
+        controller = self._controller(resolved_workspace_id)
+        archived, fallback = controller.archive_conversation(record.id)
+        self._emit_event(
+            "conversation.archived",
+            {
+                "workspace_id": resolved_workspace_id,
+                "conversation_id": archived.id,
+                "active_conversation_id": fallback.id,
+            },
+        )
+        return {
+            "conversation": self._record_payload(archived),
+            "active_conversation": self._record_payload(fallback),
+            "active_conversation_id": fallback.id,
+        }
+
+    def restore_conversation(self, conversation_id: str, *, workspace_id: str | None = None) -> dict[str, object]:
+        record, resolved_workspace_id = self._find_conversation(conversation_id, workspace_id=workspace_id)
+        controller = self._controller(resolved_workspace_id)
+        restored = controller.restore_conversation(record.id)
+        self._emit_event(
+            "conversation.restored",
+            {
+                "workspace_id": resolved_workspace_id,
+                "conversation_id": restored.id,
+                "active_conversation_id": restored.id,
+            },
+        )
+        payload = self._record_payload(restored)
+        payload["active_conversation_id"] = restored.id
+        return payload
 
     def send_message(
         self,
@@ -647,6 +721,11 @@ class AgentRunnerService:
 
     def get_settings(self) -> dict[str, object]:
         settings = self.app_settings
+        resolved_context_char_cap, context_char_cap_source = self.context_assembler.resolved_context_char_cap(
+            provider=settings.provider,
+            model=settings.model,
+            configured_context_char_cap=settings.context_char_cap,
+        )
         return {
             "provider": str(settings.provider),
             "model": settings.model,
@@ -658,6 +737,9 @@ class AgentRunnerService:
             "ollama_host": settings.ollama_host,
             "max_step_retries": settings.max_step_retries,
             "phase_timeout_seconds": settings.phase_timeout_seconds,
+            "context_char_cap": settings.context_char_cap,
+            "resolved_context_char_cap": resolved_context_char_cap,
+            "context_char_cap_source": context_char_cap_source,
         }
 
     def get_setup_status(self) -> dict[str, object]:
@@ -690,6 +772,9 @@ class AgentRunnerService:
         timeout = payload.get("phase_timeout_seconds")
         if timeout is not None:
             settings.phase_timeout_seconds = max(30, int(timeout))
+        if "context_char_cap" in payload:
+            context_char_cap = payload.get("context_char_cap")
+            settings.context_char_cap = None if context_char_cap in {None, ""} else max(100, int(context_char_cap))
         save_app_settings(self.config.settings_path, settings)
         return self.get_settings()
 
@@ -910,7 +995,12 @@ class AgentRunnerService:
         controller = self._controller(request.workspace_id)
         controller.select_conversation(request.conversation_id)
         user_record = controller.append_message(role="user", content=request.content)
-        self._refresh_summary_if_needed(controller, user_record.id)
+        self._refresh_summary_if_needed(
+            controller,
+            user_record.id,
+            provider=request.provider,
+            model=request.model,
+        )
         active_record = controller.active_conversation()
         effective_context = (
             self.context_assembler.build_for_loop(
@@ -922,6 +1012,7 @@ class AgentRunnerService:
                 current_input=request.content,
                 assistant_mode=request.assistant_mode,
                 page_context=request.page_context,
+                configured_context_char_cap=self.app_settings.context_char_cap,
             )
             if request.mode == RunMode.LOOP
             else self.context_assembler.build_for_message(
@@ -933,6 +1024,7 @@ class AgentRunnerService:
                 current_input=request.content,
                 assistant_mode=request.assistant_mode,
                 page_context=request.page_context,
+                configured_context_char_cap=self.app_settings.context_char_cap,
             )
         )
         self.coordinator.update_status(
@@ -1143,7 +1235,13 @@ class AgentRunnerService:
         controller = self._controller(workspace_id)
         controller.select_conversation(conversation_id)
         record = controller.append_message(role="assistant", content=text, phase=phase)
-        self._refresh_summary_if_needed(controller, record.id)
+        provider, model = self._effective_provider_and_model()
+        self._refresh_summary_if_needed(
+            controller,
+            record.id,
+            provider=provider,
+            model=model,
+        )
         self._emit_event(
             "conversation.updated",
             {
@@ -1260,6 +1358,11 @@ class AgentRunnerService:
 
     def _controller(self, workspace_id: str) -> WorkspaceConversationController:
         return WorkspaceConversationController(self.conversation_store, workspace_id)
+
+    def _require_workspace_controller(self, workspace_id: str) -> WorkspaceConversationController:
+        if not self.conversation_store.workspace_exists(workspace_id):
+            raise KeyError(workspace_id)
+        return self._controller(workspace_id)
 
     def _workspace_id_for_repo_path(self, repo_path: Path) -> str | None:
         expected = repo_path.resolve()
@@ -1429,16 +1532,35 @@ class AgentRunnerService:
         latest = conversations[0]
         return str(latest["workspace_id"]), str(latest["id"])
 
-    def _refresh_summary_if_needed(self, controller: WorkspaceConversationController, conversation_id: str) -> None:
+    def _refresh_summary_if_needed(
+        self,
+        controller: WorkspaceConversationController,
+        conversation_id: str,
+        *,
+        provider: ProviderKind,
+        model: str,
+    ) -> None:
         record = controller.active_conversation()
         if record.id != conversation_id:
             return
-        summary = self.context_assembler.refresh_summary(record)
+        summary = self.context_assembler.refresh_summary(
+            record,
+            provider=provider,
+            model=model,
+            configured_context_char_cap=self.app_settings.context_char_cap,
+        )
         if summary != record.summary:
             controller.update_summary(conversation_id, summary)
 
     def _record_payload(self, record: ConversationRecord, *, include_messages: bool = False) -> dict[str, object]:
         workspace = self.ensure_workspace(record.workspace_id)
+        provider, model = self._effective_provider_and_model()
+        context_window = self.context_assembler.conversation_metrics(
+            record,
+            provider=provider,
+            model=model,
+            configured_context_char_cap=self.app_settings.context_char_cap,
+        )
         payload = {
             "id": record.id,
             "workspace_id": record.workspace_id,
@@ -1452,6 +1574,9 @@ class AgentRunnerService:
             "summary": record.summary,
             "preview": self._conversation_preview(record),
             "workspace_kind": workspace.get("workspace_kind", "standard"),
+            "archived_at": record.archived_at,
+            "is_archived": bool(record.archived_at),
+            "context_window": context_window,
         }
         if include_messages:
             payload["messages"] = [asdict(message) for message in record.messages]
@@ -1484,7 +1609,7 @@ class AgentRunnerService:
             "display_name": controller.state.display_name or controller.workspace_id,
             "repo_path": controller.state.repo_path,
             "active_conversation_id": controller.state.active_conversation_id,
-            "conversation_count": len(controller.state.conversation_ids),
+            "conversation_count": len(controller.metadata()),
             "conversations_panel_collapsed": controller.state.conversations_panel_collapsed,
             "updated_at": updated_at,
             "title": title,

@@ -135,6 +135,7 @@ class ConversationRecord:
     page_context: dict[str, object] = field(default_factory=dict)
     summary: str | None = None
     messages: list[ConversationMessage] = field(default_factory=list)
+    archived_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -174,4 +175,5 @@ class AppSettings:
     animate_status_scenes: bool = True
     max_step_retries: int = 2
     phase_timeout_seconds: int = 240
+    context_char_cap: int | None = None
     default_checks: list[str] = field(default_factory=list)
