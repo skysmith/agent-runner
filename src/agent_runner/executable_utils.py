@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 _COMMON_USER_BIN_DIRS = (
+    Path("/Applications/Codex.app/Contents/Resources"),
     Path.home() / ".npm-global" / "bin",
     Path.home() / ".local" / "bin",
     Path.home() / ".volta" / "bin",

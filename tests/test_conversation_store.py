@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent_runner.conversation_store import (
     ConversationStore,
     DEFAULT_CONVERSATION_TITLE,
@@ -55,6 +57,45 @@ def test_controller_delete_active_conversation_selects_fallback(tmp_path: Path) 
     assert controller.state.active_conversation_id == second.id
 
 
+def test_clear_conversation_resets_messages_summary_and_title(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
+    controller = WorkspaceConversationController(store, "workspace-1")
+    record = controller.active_conversation()
+
+    controller.append_message(role="user", content="Investigate dashboard regression")
+    controller.append_message(role="assistant", content="Working on it")
+    controller.update_summary(record.id, "Earlier summary")
+
+    cleared = controller.clear_conversation(record.id)
+
+    assert cleared.title == DEFAULT_CONVERSATION_TITLE
+    assert cleared.messages == []
+    assert cleared.summary is None
+    assert cleared.archived_at is None
+
+
+def test_archive_and_restore_conversation_keeps_history_but_hides_from_active_metadata(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
+    controller = WorkspaceConversationController(store, "workspace-1")
+    record = controller.active_conversation()
+
+    controller.append_message(role="user", content="Preserve this thread")
+    archived, fallback = controller.archive_conversation(record.id)
+
+    assert archived.archived_at is not None
+    assert archived.messages[0].content == "Preserve this thread"
+    assert archived.id not in [item.id for item in controller.metadata()]
+    assert archived.id in [item.id for item in controller.metadata(include_archived=True)]
+    assert fallback.id != archived.id
+
+    restored = controller.restore_conversation(archived.id)
+
+    assert restored.archived_at is None
+    assert restored.messages[0].content == "Preserve this thread"
+    assert controller.state.active_conversation_id == restored.id
+    assert restored.id in [item.id for item in controller.metadata()]
+
+
 def test_workspace_profile_round_trip(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
     controller = WorkspaceConversationController(store, "workspace-1")
@@ -87,3 +128,10 @@ def test_workspace_profile_round_trip(tmp_path: Path) -> None:
 def test_derive_conversation_title_uses_first_non_empty_line() -> None:
     title = derive_conversation_title("\n\nInvestigate dashboard regression\nwith extra details")
     assert title == "Investigate dashboard regression"
+
+
+def test_store_rejects_unsafe_workspace_ids(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
+
+    with pytest.raises(ValueError):
+        WorkspaceConversationController(store, "../../outside-workspace")

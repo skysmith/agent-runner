@@ -393,14 +393,14 @@ def test_runner_infers_phase_provider_from_model_name(monkeypatch, tmp_path: Pat
         repo_path=tmp_path,
         artifacts_dir=tmp_path / ".agent-runner",
         provider=ProviderKind.OLLAMA,
-        model="qwen3:8b",
-        planner_model="qwen3:8b",
+        model="qwen3.5:9b",
+        planner_model="qwen3.5:9b",
         builder_model="gpt-5.3-codex",
-        reviewer_model="qwen3:8b",
+        reviewer_model="qwen3.5:9b",
     )
     outcome = AgentRunner(config).run()
     assert outcome.ok is True
-    assert seen_model == ["qwen3:8b", "gpt-5.3-codex", "qwen3:8b"]
+    assert seen_model == ["qwen3.5:9b", "gpt-5.3-codex", "qwen3.5:9b"]
     assert seen_provider == [ProviderKind.OLLAMA, ProviderKind.CODEX, ProviderKind.OLLAMA]
 
 

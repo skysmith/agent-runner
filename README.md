@@ -2,6 +2,42 @@
 
 Calm, repo-scoped control for Codex, built around visible artifacts.
 
+Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built.
+
+It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
+
+## At a glance
+
+- browser-first Codex workspace for local repos
+- one durable thread per workspace instead of a pile of disconnected prompts
+- live artifact preview beside the chat
+- explicit review output, checks, changed files, and build status
+- mobile companion flow at `/m`
+- studio modes for games, websites, docs, data, images, and video work
+
+## Screenshots
+
+![Alcove Web Studio showing chat on the left and a live landing page preview on the right](docs/images/quiet-launch-studio.png)
+
+_Web Studio: steer the artifact from the conversation while the preview stays visible._
+
+![Alcove Game Studio showing chat on the left and a live game preview on the right](docs/images/storybook-station-studio.png)
+
+_Game Studio: the same shell, but for playable artifacts and preview-first iteration._
+
+![Alcove Game Studio showing a live run in progress while the game preview stays visible](docs/images/detective-running-studio.png)
+
+_A real Game Studio session in motion: conversation, run state, and live preview all stay in the same frame._
+
+## Feedback Wanted
+
+If you poke around and have reactions, the most useful feedback is:
+
+- would you actually prefer this over a terminal-only Codex loop for any kind of work?
+- which workspace or studio mode feels most real right now?
+- what feels compelling versus overbuilt?
+- what would you want to see before trusting this for daily use?
+
 ## Open Source Status
 
 Alcove is still early, but this repo is intended to be usable in public:
@@ -11,7 +47,7 @@ Alcove is still early, but this repo is intended to be usable in public:
 - tests should be green before release cuts
 - internal roadmap docs are kept in-repo for product context, not as polished public docs
 
-If you are landing here for the first time, start with the dev quickstart below.
+If you are landing here for the first time, start with the dev quickstart below. If you want outreach copy for sharing the project, see `docs/community-feedback-posts.md`.
 
 ## Quickstart
 
@@ -47,10 +83,6 @@ alcove doctor
 
 During the transition, the older `agent-runner` command name and `./agent-runner.command` launcher still work as compatibility aliases.
 
-Alcove is a browser-first workspace for steering Codex against real local projects with one durable chat per workspace, clear context management, and a right pane that can show the live thing being built. The product is strongest when the left pane is control and the right pane is the artifact.
-
-It is not trying to replace the terminal. It is trying to make high-leverage Codex workflows easier to steer, easier to trust, and easier to pick back up from anywhere.
-
 ## Product Shape
 
 Alcove now has two closely related product patterns:
@@ -68,6 +100,8 @@ The long-term studio family is:
 - `studio_web`
 - `studio_data`
 - `studio_docs`
+- `studio_image`
+- `studio_video`
 
 The shared platform idea is simple:
 
@@ -76,6 +110,18 @@ The shared platform idea is simple:
 - preview state and preview URL are first-class
 - publish/share/export flows are explicit
 - remix/template flows should reuse the same shell and service contract
+
+## Authoritative image workflow
+
+For image generation, Alcove Image Studio is now the supported path.
+
+- generate images from prompts inside Alcove
+- upload source/reference images into the same library
+- queue multiple image runs without leaving the workspace
+- pick a winner and run `Make 3D` from that image
+- keep source-image lineage, artifacts, and downloads in the same workspace
+
+Older external dashboards and sidecar image-gen tools should be treated as legacy setup, not the recommended workflow. If you want to make images with Alcove, open Image Studio and do it there.
 
 ## Why this exists
 
@@ -125,6 +171,12 @@ The unified Alcove roadmap now treats studios as a product family:
 
 - **Docs Studio**
   Rendered docs, landing pages, tutorials, and guides beside the conversation, with strong publish/export flows.
+
+- **Image Studio**
+  The authoritative image-generation surface. Prompt, upload, review, queue, and `Make 3D` without leaving Alcove.
+
+- **Video Studio**
+  The Alcove-owned entry point for future text-to-video and image-to-video workflows, even when the rendering engine lives behind a separate worker.
 
 Read the unified roadmap here:
 
@@ -182,7 +234,8 @@ Desktop and browser UI support:
 - `Stop Safely` to halt after the current phase and keep your workspace state
 - compact status indicator animation in the composer while runs are active
 - mobile companion flow at `/m`
-- Alcove Studio v1 for game workspaces with managed preview and publish/share URLs
+- Studio surfaces for game, web, data, docs, image, and video workspaces
+- native Image Studio generation, uploads, queued image runs, and mock `Make 3D` lineage
 
 Or without installing the script entrypoint:
 

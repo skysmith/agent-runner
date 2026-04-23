@@ -43,7 +43,7 @@ class RunnerConfig:
     max_step_retries: int = 2
     check_commands: list[str] | None = None
     dry_run: bool = False
-    phase_timeout_seconds: int = 240
+    phase_timeout_seconds: int = 7200
     progress: bool = True
     status_callback: Callable[[str], None] | None = None
     stop_requested: Callable[[], bool] | None = None
@@ -150,12 +150,14 @@ class AgentRunner:
                             prior_feedback,
                             mind_map_text=mind_map_text,
                             conversation_context=self.config.conversation_context,
+                            available_checks=check_cmds,
                         ),
                         schema=builder_schema(),
                         repo_path=self.config.repo_path,
                         extra_access_dir=self.config.extra_access_dir,
                         ollama_host=self.config.ollama_host,
                         dry_run=self.config.dry_run,
+                        allowed_check_commands=tuple(check_cmds),
                         timeout_seconds=self.config.phase_timeout_seconds,
                         phase_name=f"builder ({step.id} attempt {attempt})",
                     )

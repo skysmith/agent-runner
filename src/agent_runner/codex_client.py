@@ -169,7 +169,17 @@ def _parse_json_text(value: object) -> dict | None:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return None
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            break
+        else:
+            return None
     if isinstance(parsed, dict):
         return parsed
     return None

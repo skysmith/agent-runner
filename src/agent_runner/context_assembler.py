@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 
 from .conversation_store import build_transcript, synthesize_summary
@@ -9,6 +10,7 @@ from .models import AssistantCapabilityMode, ConversationRecord, ProviderKind, R
 from .prompt_context import load_mind_map, render_mind_map_block
 
 DEFAULT_CONTEXT_CHAR_CAP = 12000
+DEFAULT_CODEX_CONTEXT_CHAR_CAP = 100000
 DEFAULT_RECENT_MESSAGE_COUNT = 8
 DEFAULT_SUMMARY_SOURCE_COUNT = 10
 
@@ -29,11 +31,11 @@ class ContextAssembler:
     def __init__(
         self,
         *,
-        context_char_cap: int = DEFAULT_CONTEXT_CHAR_CAP,
+        context_char_cap: int | None = None,
         recent_message_count: int = DEFAULT_RECENT_MESSAGE_COUNT,
         summary_source_count: int = DEFAULT_SUMMARY_SOURCE_COUNT,
     ):
-        self.context_char_cap = max(100, context_char_cap)
+        self.context_char_cap = self._normalize_context_char_cap(context_char_cap)
         self.recent_message_count = max(2, recent_message_count)
         self.summary_source_count = max(2, summary_source_count)
 
@@ -48,7 +50,13 @@ class ContextAssembler:
         current_input: str,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        configured_context_char_cap: int | None = None,
     ) -> EffectiveContext:
+        context_char_cap, _ = self.resolved_context_char_cap(
+            provider=provider,
+            model=model,
+            configured_context_char_cap=configured_context_char_cap,
+        )
         return EffectiveContext(
             system_context=self._system_context(
                 repo_path=repo_path,
@@ -58,7 +66,10 @@ class ContextAssembler:
                 assistant_mode=assistant_mode or conversation.assistant_mode,
                 page_context=page_context if page_context is not None else conversation.page_context,
             ),
-            conversation_context=self._conversation_context(conversation),
+            conversation_context=self._conversation_context(
+                conversation,
+                context_char_cap=context_char_cap,
+            ),
             current_input=f"CURRENT USER MESSAGE:\n{current_input.strip()}",
         )
 
@@ -73,7 +84,13 @@ class ContextAssembler:
         current_input: str,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        configured_context_char_cap: int | None = None,
     ) -> EffectiveContext:
+        context_char_cap, _ = self.resolved_context_char_cap(
+            provider=provider,
+            model=model,
+            configured_context_char_cap=configured_context_char_cap,
+        )
         return EffectiveContext(
             system_context=self._system_context(
                 repo_path=repo_path,
@@ -83,13 +100,73 @@ class ContextAssembler:
                 assistant_mode=assistant_mode or conversation.assistant_mode,
                 page_context=page_context if page_context is not None else conversation.page_context,
             ),
-            conversation_context=self._conversation_context(conversation),
+            conversation_context=self._conversation_context(
+                conversation,
+                context_char_cap=context_char_cap,
+            ),
             current_input=f"LATEST USER DIRECTIVE:\n{current_input.strip()}",
         )
 
-    def refresh_summary(self, conversation: ConversationRecord) -> str | None:
+    def resolved_context_char_cap(
+        self,
+        *,
+        provider: ProviderKind,
+        model: str,
+        configured_context_char_cap: int | None = None,
+    ) -> tuple[int, str]:
+        cap = self._normalize_context_char_cap(configured_context_char_cap)
+        if cap is None:
+            cap = self.context_char_cap
+        if cap is not None:
+            return cap, "manual"
+        if provider == ProviderKind.CODEX or self._looks_like_codex_model(model):
+            return DEFAULT_CODEX_CONTEXT_CHAR_CAP, "provider-default"
+        return DEFAULT_CONTEXT_CHAR_CAP, "default"
+
+    def conversation_metrics(
+        self,
+        conversation: ConversationRecord,
+        *,
+        provider: ProviderKind,
+        model: str,
+        configured_context_char_cap: int | None = None,
+    ) -> dict[str, object]:
+        context_char_cap, cap_source = self.resolved_context_char_cap(
+            provider=provider,
+            model=model,
+            configured_context_char_cap=configured_context_char_cap,
+        )
         transcript = build_transcript(conversation.messages)
-        if len(transcript) <= self.context_char_cap:
+        context_text = self._conversation_context(conversation, context_char_cap=context_char_cap)
+        transcript_chars = len(transcript)
+        context_chars = len(context_text)
+        summary_active = transcript_chars > context_char_cap and bool(
+            conversation.messages[:-self.recent_message_count]
+        )
+        return {
+            "transcript_chars": transcript_chars,
+            "context_chars": context_chars,
+            "approx_tokens": math.ceil(context_chars / 4) if context_chars else 0,
+            "context_char_cap": context_char_cap,
+            "summary_active": summary_active,
+            "cap_source": cap_source,
+        }
+
+    def refresh_summary(
+        self,
+        conversation: ConversationRecord,
+        *,
+        provider: ProviderKind,
+        model: str,
+        configured_context_char_cap: int | None = None,
+    ) -> str | None:
+        context_char_cap, _ = self.resolved_context_char_cap(
+            provider=provider,
+            model=model,
+            configured_context_char_cap=configured_context_char_cap,
+        )
+        transcript = build_transcript(conversation.messages)
+        if len(transcript) <= context_char_cap:
             return None
         head = conversation.messages[:-self.recent_message_count]
         if not head:
@@ -151,11 +228,11 @@ class ContextAssembler:
             lines.extend(["", mind_map_block])
         return "\n".join(lines).strip()
 
-    def _conversation_context(self, conversation: ConversationRecord) -> str:
+    def _conversation_context(self, conversation: ConversationRecord, *, context_char_cap: int) -> str:
         transcript = build_transcript(conversation.messages)
         if not transcript:
             return f"ACTIVE CONVERSATION:\n- title: {conversation.title}\n- no prior messages yet"
-        if len(transcript) <= self.context_char_cap:
+        if len(transcript) <= context_char_cap:
             return f"ACTIVE CONVERSATION ({conversation.title}):\n{transcript}"
         recent = conversation.messages[-self.recent_message_count :]
         summary = (conversation.summary or "").strip()
@@ -168,3 +245,14 @@ class ContextAssembler:
         if recent_text:
             parts.extend(["RECENT MESSAGES:", recent_text])
         return "\n".join(parts).strip()
+
+    @staticmethod
+    def _normalize_context_char_cap(value: int | None) -> int | None:
+        if value is None:
+            return None
+        return max(100, int(value))
+
+    @staticmethod
+    def _looks_like_codex_model(model: str) -> bool:
+        normalized = str(model or "").strip().lower()
+        return normalized.startswith("gpt-5") or "codex" in normalized

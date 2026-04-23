@@ -135,6 +135,7 @@ class ConversationRecord:
     page_context: dict[str, object] = field(default_factory=dict)
     summary: str | None = None
     messages: list[ConversationMessage] = field(default_factory=list)
+    archived_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -161,6 +162,8 @@ class WorkspaceSessionState:
 class AppSettings:
     provider: ProviderKind = ProviderKind.CODEX
     model: str = "gpt-5.3-codex"
+    openai_model: str = "gpt-5.3-codex"
+    open_source_model: str | None = None
     planner_model: str | None = None
     builder_model: str | None = None
     reviewer_model: str | None = None
@@ -173,5 +176,7 @@ class AppSettings:
     checks_policy: ChecksPolicy = ChecksPolicy.AUTO
     animate_status_scenes: bool = True
     max_step_retries: int = 2
-    phase_timeout_seconds: int = 240
+    phase_timeout_seconds: int = 7200
+    context_char_cap: int | None = None
+    arcade_repo_path: Path | None = None
     default_checks: list[str] = field(default_factory=list)

@@ -6,6 +6,7 @@ DESKTOP_DIR="${HOME}/Desktop"
 APPLICATIONS_DIR="${HOME}/Applications"
 APP_NAME="Alcove"
 SOURCE_APP="${SCRIPT_DIR}/build/macos/${APP_NAME}.app"
+AUTHORITATIVE_APP="${APPLICATIONS_DIR}/${APP_NAME}.app"
 
 mkdir -p "$APPLICATIONS_DIR"
 
@@ -21,20 +22,21 @@ if [[ ! -d "$SOURCE_APP" ]]; then
   exit 1
 fi
 
-TARGET_DIRS=("$APPLICATIONS_DIR")
-if [[ -d "$DESKTOP_DIR" ]]; then
-  TARGET_DIRS+=("$DESKTOP_DIR")
-fi
+rm -rf "$AUTHORITATIVE_APP"
+rm -rf "${APPLICATIONS_DIR}/agent-runner.app"
+cp -R "$SOURCE_APP" "$AUTHORITATIVE_APP"
+touch "$AUTHORITATIVE_APP"
+echo "Installed authoritative launcher: $AUTHORITATIVE_APP"
+echo "Removed legacy launcher: ${APPLICATIONS_DIR}/agent-runner.app"
 
-for target_dir in "${TARGET_DIRS[@]}"; do
-  app_bundle="${target_dir}/${APP_NAME}.app"
-  legacy_app_bundle="${target_dir}/agent-runner.app"
-  rm -rf "$app_bundle"
-  rm -rf "$legacy_app_bundle"
-  cp -R "$SOURCE_APP" "$app_bundle"
-  touch "$app_bundle"
-  echo "Installed launcher: $app_bundle"
-  echo "Removed legacy launcher: $legacy_app_bundle"
-done
+if [[ -d "$DESKTOP_DIR" ]]; then
+  desktop_app="${DESKTOP_DIR}/${APP_NAME}.app"
+  legacy_desktop_app="${DESKTOP_DIR}/agent-runner.app"
+  rm -rf "$desktop_app"
+  rm -rf "$legacy_desktop_app"
+  ln -s "$AUTHORITATIVE_APP" "$desktop_app"
+  echo "Installed desktop shortcut: $desktop_app -> $AUTHORITATIVE_APP"
+  echo "Removed legacy launcher: $legacy_desktop_app"
+fi
 
 echo "Source app: $SOURCE_APP"

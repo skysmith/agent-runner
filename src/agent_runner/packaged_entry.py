@@ -7,21 +7,25 @@ import subprocess
 import threading
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 from agent_runner.app_paths import DEFAULT_ARTIFACTS_DIR, resolve_runtime_paths
 from agent_runner.http_api import create_server
+from agent_runner.image_workflow import default_image_asset_export_root
 from agent_runner.macos_wrapper import (
     LaunchAgentManager,
     LaunchAgentSpec,
     MacOSWrapperBridge,
     app_bundle_path,
+    capture_native_speech,
     copy_connection_url,
+    copy_text_to_clipboard,
     install_open_in_alcove_quick_action,
     is_macos,
     launch_agent_label,
     launch_agent_path,
     load_wrapper_state,
+    native_speech_available,
     local_api_request,
     open_browser_for_state,
     open_url,
@@ -31,9 +35,10 @@ from agent_runner.macos_wrapper import (
     wait_for_server,
     wrapper_log_dir,
 )
-from agent_runner.models import ProviderKind
+from agent_runner.models import AppSettings, ProviderKind
 from agent_runner.server_info import server_info
 from agent_runner.service import AgentRunnerService, ServiceConfig
+from agent_runner.settings_store import load_app_settings
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,10 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--control",
         choices=[
+            "launch-arcade",
             "copy-local-url",
             "copy-phone-url",
             "install-quick-action",
             "open-browser",
+            "open-image-studio",
             "open-current-workspace",
             "restart-service",
             "stop-run",
@@ -59,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(_launcher_args(argv))
     wrapper_executable = _wrapper_executable_path()
     wrapper_bundle = _wrapper_app_bundle(wrapper_executable)
     requested_repo = _requested_repo_path(wrapper_bundle)
@@ -130,7 +137,26 @@ def _run_service_mode(
     open_browser: bool = False,
 ) -> int:
     service = _build_service(runtime)
-    server = create_server(service, host=host, port=port, access_password=password)
+    native_transcriber = None
+    if wrapper_bundle is not None and is_macos() and native_speech_available(
+        app_bundle=wrapper_bundle,
+        executable_path=wrapper_executable,
+    ):
+        def _transcribe_native(locale: str | None = None) -> dict[str, Any]:
+            return capture_native_speech(
+                app_bundle=wrapper_bundle,
+                executable_path=wrapper_executable,
+                locale=locale,
+            )
+
+        native_transcriber = _transcribe_native
+    server = create_server(
+        service,
+        host=host,
+        port=port,
+        access_password=password,
+        native_transcriber=native_transcriber,
+    )
     info = _server_payload(host, server.server_port, repo_path=runtime.repo_path)
     bridge = MacOSWrapperBridge(
         state_root=runtime.settings_path.parent,
@@ -267,10 +293,32 @@ def _run_control_action(
         return 0 if copy_connection_url(state_root, kind="local") else 1
     if action == "copy-phone-url":
         return 0 if copy_connection_url(state_root, kind="phone") else 1
+    if action == "launch-arcade":
+        return _run_arcade_cli_subcommand(runtime_repo=runtime_repo)
     if action == "open-browser":
         return 0 if open_browser_for_state(state_root, prefer_current_workspace=False) else 1
+    if action == "open-image-studio":
+        return (
+            0
+            if open_browser_for_state(
+                state_root,
+                prefer_current_workspace=False,
+                intent="image-studio",
+                view="studio",
+            )
+            else 1
+        )
     if action == "open-current-workspace":
-        return 0 if open_browser_for_state(state_root, prefer_current_workspace=True) else 1
+        workspace_path = _current_workspace_folder(
+            runtime_repo=runtime_repo,
+            state_root=state_root,
+            port=port,
+            password=password,
+        )
+        if workspace_path is None:
+            return 1
+        open_url(str(workspace_path))
+        return 0
     if action == "restart-service":
         if wrapper_bundle is None:
             return 1
@@ -312,6 +360,23 @@ def _run_control_action(
     return 1
 
 
+def _run_arcade_cli_subcommand(*, runtime_repo: Path) -> int:
+    python_bin = str(os.environ.get("AGENT_RUNNER_PYTHON") or os.sys.executable or "").strip()
+    if not python_bin:
+        return 1
+    env = dict(os.environ)
+    env["AGENT_RUNNER_REPO"] = str(runtime_repo.resolve())
+    completed = subprocess.run(
+        [python_bin, "-m", "agent_runner.cli", "arcade"],
+        cwd=str(runtime_repo),
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return int(completed.returncode)
+
+
 def _build_service(runtime) -> AgentRunnerService:
     return AgentRunnerService(
         ServiceConfig(
@@ -327,6 +392,7 @@ def _build_service(runtime) -> AgentRunnerService:
             phase_timeout_seconds=240,
             check_commands=[],
             dry_run=False,
+            image_export_root=default_image_asset_export_root(),
         )
     )
 
@@ -370,15 +436,228 @@ def _requested_repo_path(app_bundle: Path | None) -> Path | None:
     return Path(repo_env).expanduser()
 
 
+def _launch_arcade(
+    *,
+    runtime_repo: Path,
+    state_root: Path,
+    port: int,
+    password: str | None,
+) -> int:
+    arcade_repo = _resolve_arcade_repo(runtime_repo)
+    if arcade_repo is None:
+        return 1
+
+    info = wait_for_server(
+        base_url=f"http://127.0.0.1:{port}",
+        password=password,
+        expected_repo=runtime_repo,
+        timeout_seconds=4.0,
+    )
+    imported = local_api_request(
+        base_url=str(info["localhost_url"]),
+        path="/api/workspaces/import-folder",
+        method="POST",
+        password=password,
+        payload={"repo_path": str(arcade_repo.resolve())},
+    )
+    workspace_id = str(imported.get("id") or "").strip() or None
+    conversation_id = str(imported.get("active_conversation_id") or "").strip() or None
+    save_wrapper_state(
+        state_root,
+        {
+            **load_wrapper_state(state_root),
+            "preferred_workspace_id": workspace_id,
+            "preferred_conversation_id": conversation_id,
+        },
+    )
+    if not workspace_id:
+        return 1
+
+    published = local_api_request(
+        base_url=str(info["localhost_url"]),
+        path=f"/api/workspaces/{quote(workspace_id, safe='')}/studio/publish",
+        method="POST",
+        password=password,
+        payload={},
+    )
+    open_url_value = _preferred_publish_open_url(info=info, workspace=published)
+    copy_url_value = _preferred_publish_copy_url(info=info, workspace=published)
+    if not open_url_value:
+        return 1
+    copy_text_to_clipboard(copy_url_value or open_url_value)
+    _open_arcade_url_in_chrome(open_url_value)
+    return 0
+
+
+def _configured_arcade_repo_path(runtime_repo: Path) -> Path | None:
+    settings_path = resolve_runtime_paths(repo_path=runtime_repo, artifacts_dir=DEFAULT_ARTIFACTS_DIR).settings_path
+    settings = load_app_settings(settings_path, defaults=AppSettings())
+    configured = settings.arcade_repo_path
+    if configured is None:
+        return None
+    try:
+        resolved = configured.expanduser().resolve()
+    except OSError:
+        return None
+    if resolved.exists() and resolved.is_dir():
+        return resolved
+    return None
+
+
+def _resolve_arcade_repo(runtime_repo: Path) -> Path | None:
+    configured = _configured_arcade_repo_path(runtime_repo)
+    if configured is not None:
+        return configured
+    candidate_roots = [runtime_repo, *runtime_repo.parents]
+    seen: set[Path] = set()
+    for root in candidate_roots:
+        try:
+            resolved_root = root.resolve()
+        except OSError:
+            continue
+        if resolved_root in seen:
+            continue
+        seen.add(resolved_root)
+        arcade_repo = resolved_root / "games" / "arcade"
+        if arcade_repo.exists() and arcade_repo.is_dir():
+            return arcade_repo
+    return None
+
+
+def _preferred_publish_open_url(*, info: dict[str, Any], workspace: dict[str, Any]) -> str | None:
+    publish_path = str(workspace.get("publish_url") or "").strip()
+    if not publish_path:
+        return None
+    for target in ("local", "current", "phone"):
+        candidate = _absolute_workspace_url(path=publish_path, info=info, target=target)
+        if candidate:
+            return candidate
+    return None
+
+
+def _preferred_publish_copy_url(*, info: dict[str, Any], workspace: dict[str, Any]) -> str | None:
+    publish_path = str(workspace.get("publish_url") or "").strip()
+    if not publish_path:
+        return None
+    for target in ("phone", "local", "current"):
+        candidate = _absolute_workspace_url(path=publish_path, info=info, target=target)
+        if candidate:
+            return candidate
+    return None
+
+
+def _absolute_workspace_url(*, path: str, info: dict[str, Any], target: str) -> str:
+    value = path.strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        return value
+    if target == "phone":
+        base = str(info.get("phone_url") or "").strip()
+    elif target == "local":
+        base = str(info.get("local_url") or info.get("localhost_url") or "").strip()
+    else:
+        base = str(info.get("localhost_url") or info.get("local_url") or "").strip()
+    if not base:
+        return value
+    return f"{base.rstrip('/')}/{value.lstrip('/')}"
+
+
+def _open_url_in_chrome(url: str) -> None:
+    if not url.strip():
+        return
+    script = """
+on run argv
+  if (count of argv) < 1 then return "missing-url"
+  set targetUrl to item 1 of argv
+  tell application "Google Chrome"
+    activate
+    if not running then
+      launch
+      delay 0.3
+    end if
+    if (count of windows) is 0 then
+      make new window
+      delay 0.1
+    end if
+    tell front window
+      set active tab index to 1
+      set URL of active tab to targetUrl
+    end tell
+    activate
+  end tell
+  return "opened"
+end run
+"""
+    scripted = subprocess.run(
+        ["osascript", "-", url],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if scripted.returncode == 0 and scripted.stdout.strip() == "opened":
+        return
+    completed = subprocess.run(
+        ["open", "-a", "Google Chrome", url],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode == 0:
+        return
+    open_url(url)
+
+
+def _open_arcade_url_in_chrome(url: str) -> None:
+    if not url.strip():
+        return
+    _open_url_in_chrome_app_mode(url)
+
+
+def _open_url_in_chrome_app_mode(url: str) -> None:
+    if not url.strip():
+        return
+    chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    completed = subprocess.run(
+        [chrome_bin, f"--app={url}", "--start-fullscreen"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode == 0:
+        return
+    _open_url_in_chrome(url)
+
+
+def _launcher_args(argv: list[str] | None) -> list[str]:
+    raw_args = list(argv if argv is not None else os.sys.argv[1:])
+    return [arg for arg in raw_args if not str(arg).startswith("-psn_")]
+
+
 def _first_folder_target(targets: list[str]) -> Path | None:
     for raw in targets:
-        text = raw.strip()
-        if not text:
+        candidate = _folder_target_path(raw)
+        if candidate is None:
             continue
-        candidate = Path(text).expanduser()
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None
+
+
+def _folder_target_path(raw: str) -> Path | None:
+    text = str(raw or "").strip()
+    if not text or text.startswith("-psn_"):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme.lower() == "file":
+        target = unquote(parsed.path or "")
+        netloc = parsed.netloc.strip()
+        if netloc and netloc.lower() not in {"localhost", "127.0.0.1"}:
+            target = f"//{parsed.netloc}{target}"
+        text = target
+    return Path(text).expanduser()
 
 
 def _launch_menu_bar_helper(app_bundle: Path) -> None:
@@ -426,6 +705,46 @@ def _browser_url(*, base_url: str, workspace_id: str | None, conversation_id: st
     if not params:
         return base_url
     return f"{base_url}?{urlencode(params)}"
+
+
+def _current_workspace_folder(
+    *,
+    runtime_repo: Path,
+    state_root: Path,
+    port: int,
+    password: str | None,
+) -> Path | None:
+    payload = load_wrapper_state(state_root)
+    run_status = payload.get("run_status") or {}
+    workspace_id = None
+    if isinstance(run_status, dict):
+        workspace_id = str(run_status.get("workspace_id") or "").strip() or None
+    if not workspace_id:
+        workspace_id = str(payload.get("preferred_workspace_id") or "").strip() or None
+
+    if workspace_id:
+        try:
+            info = wait_for_server(
+                base_url=f"http://127.0.0.1:{port}",
+                password=password,
+                expected_repo=runtime_repo,
+                timeout_seconds=4.0,
+            )
+            workspace = local_api_request(
+                base_url=str(info["localhost_url"]),
+                path=f"/api/workspaces/{quote(workspace_id, safe='')}",
+                password=password,
+            )
+            repo_text = str(workspace.get("repo_path") or "").strip()
+            if repo_text:
+                return Path(repo_text).expanduser()
+        except Exception:
+            pass
+
+    repo_text = str(payload.get("repo_path") or "").strip()
+    if repo_text:
+        return Path(repo_text).expanduser()
+    return runtime_repo.expanduser()
 
 
 if __name__ == "__main__":

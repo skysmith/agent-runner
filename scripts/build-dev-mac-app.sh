@@ -38,8 +38,27 @@ cat > "${APP_CONTENTS}/Info.plist" <<'PLIST'
   <string>1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Folder</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.folder</string>
+      </array>
+    </dict>
+  </array>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Alcove uses the microphone to turn speech into text for chat prompts.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Alcove uses speech recognition to transcribe spoken prompts into the chat composer.</string>
 </dict>
 </plist>
 PLIST
@@ -165,6 +184,20 @@ if ! build_icon; then
   echo "Warning: failed to build emoji icon; continuing with default app icon." >&2
 fi
 rm -rf "$TMP_DIR"
+
+NATIVE_SPEECH_SRC="${SCRIPT_DIR}/packaging/macos/AlcoveNativeSpeech.swift"
+NATIVE_SPEECH_BIN="${APP_MACOS}/AlcoveNativeSpeech"
+
+if [[ -f "$NATIVE_SPEECH_SRC" ]] && command -v swiftc >/dev/null 2>&1; then
+  if swiftc -O -framework AVFoundation -framework Speech "$NATIVE_SPEECH_SRC" -o "$NATIVE_SPEECH_BIN"; then
+    chmod +x "$NATIVE_SPEECH_BIN"
+  else
+    rm -f "$NATIVE_SPEECH_BIN"
+    echo "Warning: could not build native speech helper." >&2
+  fi
+else
+  echo "Warning: could not build native speech helper; swiftc or source file is missing." >&2
+fi
 
 HELPER_SRC="${SCRIPT_DIR}/packaging/macos/AlcoveMenuBar.swift"
 HELPER_APP="${APP_RESOURCES}/AlcoveMenuBar.app"

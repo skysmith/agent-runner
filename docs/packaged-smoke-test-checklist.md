@@ -44,5 +44,5 @@ Standardize packaged build verification on port `8765`. Do not override `AGENT_R
 
 ## Optional Integrations
 
-- Confirm missing local extras (for example `ai-art`) do not block launch.
+- Confirm missing optional local image/video workers do not block launch.
 - Confirm the app remains usable even when optional integrations are absent.

@@ -8,7 +8,16 @@ import subprocess
 from types import SimpleNamespace
 
 from agent_runner.codex_client import CodexExecResult
+from agent_runner.image_workflow import (
+    GeneratedImageCandidate,
+    ImageTo3DJobUpdate,
+    MockImageTo3DProvider,
+    MockImageToVideoProvider,
+    StoredFile,
+    default_mock_provider,
+)
 from agent_runner.models import AssistantCapabilityMode, BuildResult, ProviderKind, ReviewResult, RunMode, RunOutcome, StepRun
+from agent_runner.providers import ProviderRouter
 from agent_runner.service import AgentRunnerService, ServiceConfig
 
 
@@ -94,6 +103,48 @@ def test_service_queues_second_active_run(tmp_path: Path) -> None:
     _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
     _wait_for(lambda: len(service.get_conversation(str(second["id"]), workspace_id="workspace-2")["messages"]) == 2)
     assert service.get_run_status()["queue_count"] == 0
+
+
+def test_service_clear_conversation_resets_title_and_messages(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    conversation = service.create_conversation("workspace-1", title="Investigate regression")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(conversation["id"]))
+    controller.append_message(role="user", content="Keep this out of the next run")
+    controller.append_message(role="assistant", content="Will do")
+    controller.update_summary(str(conversation["id"]), "Summary to clear")
+
+    cleared = service.clear_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert cleared["id"] == conversation["id"]
+    assert cleared["title"] == "New conversation"
+    assert cleared["messages"] == []
+    assert cleared["summary"] is None
+    assert cleared["active_conversation_id"] == conversation["id"]
+
+
+def test_service_archive_and_restore_conversation_uses_explicit_archive_state(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    conversation = service.create_conversation("workspace-1", title="Quiet launch thread")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(conversation["id"]))
+    controller.append_message(role="user", content="Preserve this conversation")
+
+    archived = service.archive_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert archived["conversation"]["id"] == conversation["id"]
+    assert archived["conversation"]["archived_at"] is not None
+    assert archived["active_conversation_id"] != conversation["id"]
+    assert str(conversation["id"]) not in {item["id"] for item in service.list_conversations("workspace-1")}
+    archived_records = service.list_conversations("workspace-1", include_archived=True)
+    assert str(conversation["id"]) in {item["id"] for item in archived_records if item["is_archived"]}
+
+    restored = service.restore_conversation(str(conversation["id"]), workspace_id="workspace-1")
+
+    assert restored["id"] == conversation["id"]
+    assert restored["archived_at"] is None
+    assert restored["active_conversation_id"] == conversation["id"]
+    assert str(conversation["id"]) in {item["id"] for item in service.list_conversations("workspace-1")}
 
 
 def test_recover_run_rejects_when_active(tmp_path: Path) -> None:
@@ -260,12 +311,17 @@ def test_send_message_normalizes_page_context_before_persisting(tmp_path: Path) 
     assert context["sell_through_window"] == "14d"
 
 
-def test_service_uses_vision_model_for_screenshot_messages_on_ollama(tmp_path: Path) -> None:
+def test_service_prefers_discovered_multimodal_model_for_screenshot_messages_on_ollama(monkeypatch, tmp_path: Path) -> None:
     client = RecordingPhaseClient(message="Visual review ready")
     service = _make_service(tmp_path, phase_client=client)
     service.app_settings.provider = ProviderKind.OLLAMA
-    service.app_settings.model = "qwen3:8b"
-    service.app_settings.vision_model = "qwen3-vl:4b"
+    service.app_settings.model = "gemma4:e4b"
+    service.app_settings.open_source_model = "gemma4:e4b"
+    service.app_settings.vision_model = "qwen3.5:9b"
+    monkeypatch.setattr(
+        "agent_runner.service.probe_ollama",
+        lambda host: type("Probe", (), {"models": ["llava:latest"], "available": True, "message": "ok"})(),
+    )
     conversation = service.create_conversation("workspace-1")
     conversation_id = str(conversation["id"])
     screenshot = tmp_path / "frame.png"
@@ -281,21 +337,19 @@ def test_service_uses_vision_model_for_screenshot_messages_on_ollama(tmp_path: P
         ),
         mode=RunMode.MESSAGE,
         provider=ProviderKind.OLLAMA,
-        model="qwen3:8b",
+        model="gemma4:e4b",
     )
 
     _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
     assert client.requests
-    assert client.requests[-1].model == "qwen3-vl:4b"
+    assert client.requests[-1].model == "llava:latest"
 
 
 def test_service_uses_single_pass_runner_for_dev_message_actions(monkeypatch, tmp_path: Path) -> None:
     service = _make_service(tmp_path, phase_client=FakePhaseClient(message="should not be used"))
     service.app_settings.provider = ProviderKind.OLLAMA
-    service.app_settings.model = "qwen3:8b"
-    service.app_settings.planner_model = "qwen3:8b"
-    service.app_settings.builder_model = "gpt-5.3-codex"
-    service.app_settings.reviewer_model = "qwen3:8b"
+    service.app_settings.model = "qwen3.5:9b"
+    service.app_settings.open_source_model = "qwen3.5:9b"
     conversation = service.create_conversation("workspace-1")
     conversation_id = str(conversation["id"])
     captured: list[object] = []
@@ -342,7 +396,7 @@ def test_service_uses_single_pass_runner_for_dev_message_actions(monkeypatch, tm
         mode=RunMode.MESSAGE,
         assistant_mode=AssistantCapabilityMode.DEV,
         provider=ProviderKind.OLLAMA,
-        model="qwen3:8b",
+        model="qwen3.5:9b",
     )
 
     _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
@@ -350,6 +404,71 @@ def test_service_uses_single_pass_runner_for_dev_message_actions(monkeypatch, tm
     assert captured[-1].max_step_retries == 0
     record = service.get_conversation(conversation_id, workspace_id="workspace-1")
     assert "Applied grounded NPC physics." in record["messages"][-1]["content"]
+
+
+def test_service_open_source_dev_message_updates_file_via_ollama_builder(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "widget.txt"
+    target.write_text("before\n", encoding="utf-8")
+    responses = iter(
+        [
+            {
+                "response": json.dumps(
+                    {
+                        "assumptions": [],
+                        "steps": [
+                            {
+                                "id": "step-1",
+                                "title": "Update widget copy",
+                                "instructions": "Edit widget.txt to say after.",
+                                "done_criteria": ["widget.txt says after"],
+                                "dependencies": [],
+                            }
+                        ],
+                    }
+                )
+            },
+            {"response": '{"kind":"tool","tool_name":"write_file","tool_args":{"path":"widget.txt","content":"after\\n"}}'},
+            {"response": '{"kind":"final","status":"ok","summary":"Updated widget.txt","files_touched":["widget.txt"],"commands_run":[],"notes":[]}'},
+            {
+                "response": json.dumps(
+                    {
+                        "verdict": "pass",
+                        "task_complete": True,
+                        "step_complete": True,
+                        "issues": [],
+                        "guidance": "",
+                    }
+                )
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "agent_runner.service.probe_ollama",
+        lambda host: type("Probe", (), {"models": [], "available": False, "message": "unavailable"})(),
+    )
+    monkeypatch.setattr("agent_runner.providers._http_json", lambda url, body=None, timeout_seconds=None: next(responses))
+    service = _make_service(tmp_path, phase_client=ProviderRouter())
+    service.app_settings.provider = ProviderKind.OLLAMA
+    service.app_settings.open_source_model = "qwen3.5:9b"
+    service.app_settings.model = "qwen3.5:9b"
+    conversation = service.create_conversation("workspace-1")
+    conversation_id = str(conversation["id"])
+
+    service.send_message(
+        workspace_id="workspace-1",
+        conversation_id=conversation_id,
+        content="Please update widget.txt so it says after.",
+        mode=RunMode.MESSAGE,
+        assistant_mode=AssistantCapabilityMode.DEV,
+        provider=ProviderKind.OLLAMA,
+        model="qwen3.5:9b",
+    )
+
+    _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+    assert target.read_text(encoding="utf-8") == "after\n"
+    record = service.get_conversation(conversation_id, workspace_id="workspace-1")
+    assert "Updated widget.txt" in record["messages"][-1]["content"]
+    assert "widget.txt" in record["messages"][-1]["content"]
 
 
 def test_define_workspace_persists_display_name_and_repo_path(tmp_path: Path) -> None:
@@ -484,6 +603,21 @@ def test_create_studio_game_scaffolds_preview_and_publish(tmp_path: Path) -> Non
     assert str(published["publish_url"]).startswith("/play/")
 
 
+def test_create_studio_workspace_defaults_unknown_game_template_to_runner(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    created = service.create_studio_workspace(
+        workspace_kind="studio_game",
+        artifact_title="Night Shift Detective",
+        template_kind="mystery",
+    )
+
+    workspace = created["workspace"]
+    assert workspace["template_kind"] == "runner"
+    game_js = (Path(str(workspace["repo_path"])) / "game.js").read_text(encoding="utf-8")
+    assert "Case Interrupted" in game_js
+
+
 def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: Path) -> None:
     service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
 
@@ -521,6 +655,752 @@ def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: 
     published = service.publish_studio_workspace(str(web["id"]))
     assert published["publish_state"] == "published"
     assert str(published["publish_url"]).startswith("/play/")
+
+
+def test_image_studio_runs_native_image_3d_and_video_workflow(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    created = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Figurine Lab",
+        template_kind="image-gen",
+        theme_prompt="Stylized collectible characters with clean silhouettes.",
+    )
+
+    workspace = created["workspace"]
+    conversation = created["conversation"]
+    assert workspace["workspace_kind"] == "studio_image"
+    assert workspace["preview_url"] is None
+    assert workspace["preview_state"] == "native"
+
+    generated = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt="A toy astronaut figurine with soft studio lighting",
+        count=3,
+    )
+    assert len(generated["images"]) == 3
+    selected_image_id = str(generated["selected_image_id"])
+
+    uploaded = service.upload_image_asset(
+        workspace_id=str(workspace["id"]),
+        file_name="source.png",
+        mime_type="image/png",
+        data=b"mock-png-bytes",
+    )
+    assert any(item["source"] == "upload" for item in uploaded["images"])
+
+    animated = service.animate_image(
+        workspace_id=str(workspace["id"]),
+        source_image_id=selected_image_id,
+    )
+    assert animated["job_id"].startswith("job_")
+
+    started = service.make_image_3d(
+        workspace_id=str(workspace["id"]),
+        source_image_id=selected_image_id,
+    )
+    assert started["job_id"].startswith("job_")
+
+    _wait_for(
+        lambda: any(
+            item["status"] == "succeeded"
+            for item in service.get_image_workflow_snapshot(str(workspace["id"]))["jobs"]
+        )
+    )
+    _wait_for(
+        lambda: any(
+            item["status"] == "succeeded"
+            for item in service.get_image_workflow_snapshot(str(workspace["id"]))["video_jobs"]
+        )
+    )
+    snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
+    assert snapshot["images"][0]["url"].startswith(f"/workspace-media/{workspace['id']}/")
+    assert snapshot["jobs"][0]["artifacts"]["glb"].startswith(f"/workspace-media/{workspace['id']}/")
+    assert snapshot["video_jobs"][0]["artifacts"]["mp4"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_video/"
+    )
+    assert snapshot["video_jobs"][0]["artifacts"]["poster_png"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_video/"
+    )
+    assert snapshot["video_jobs"][0]["artifacts"]["metadata_json"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_video/"
+    )
+    assert snapshot["jobs"][0]["artifacts"]["input_png"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_3d/"
+    )
+    assert snapshot["jobs"][0]["artifacts"]["preview_png"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_3d/"
+    )
+    assert snapshot["jobs"][0]["artifacts"]["metadata_json"].startswith(
+        f"/workspace-media/{workspace['id']}/outputs/image_to_3d/"
+    )
+    source_image = next(item for item in snapshot["images"] if item["id"] == selected_image_id)
+    assert source_image["video_ready"] is True
+    review = service.get_review_snapshot(
+        conversation_id=str(conversation["id"]),
+        workspace_id=str(workspace["id"]),
+    )
+    assert "image_workflow" in review
+
+
+def test_image_studio_queues_image_generation_requests(tmp_path: Path) -> None:
+    class BlockingRasterProvider:
+        name = "blocking-raster"
+
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+            self.prompts: list[str] = []
+
+        def generate_images(self, *, prompt: str, count: int) -> list[GeneratedImageCandidate]:
+            self.prompts.append(prompt)
+            self.started.set()
+            self.release.wait(timeout=2)
+            return default_mock_provider().generate_images(prompt=prompt, count=count)
+
+        def image_to_3d(self, *, image_path: Path, prompt_context: str | None = None):
+            return default_mock_provider().image_to_3d(image_path=image_path, prompt_context=prompt_context)
+
+    provider = BlockingRasterProvider()
+    service = AgentRunnerService(
+        ServiceConfig(
+            repo_path=tmp_path,
+            artifacts_dir=tmp_path / ".agent-runner",
+            settings_path=tmp_path / ".agent-runner" / "app-settings.json",
+            provider=ProviderKind.CODEX,
+            codex_bin="codex",
+            model="gpt-5.3-codex",
+            ollama_host="http://127.0.0.1:11434",
+            extra_access_dir=None,
+            max_step_retries=2,
+            phase_timeout_seconds=10,
+            check_commands=[],
+            dry_run=False,
+        ),
+        phase_client=FakePhaseClient(message="Studio ready"),
+        image_workflow_provider=provider,
+        image_to_3d_provider=MockImageTo3DProvider(),
+    )
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Queue Lab",
+        template_kind="image-gen",
+    )["workspace"]
+
+    first = service.queue_image_generation(
+        workspace_id=str(workspace["id"]),
+        prompt="first queued figurine",
+        count=1,
+    )
+    assert first["accepted"] is True
+    assert first["queued"] is False
+    _wait_for(lambda: provider.started.is_set())
+
+    second = service.queue_image_generation(
+        workspace_id=str(workspace["id"]),
+        prompt="second queued figurine",
+        count=1,
+    )
+    assert second["accepted"] is True
+    assert second["queued"] is True
+    assert second["queue_position"] == 1
+
+    queued_snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
+    assert queued_snapshot["generation_queue"]["active"]["prompt_preview"] == "first queued figurine"
+    assert queued_snapshot["generation_queue"]["items"][0]["prompt_preview"] == "second queued figurine"
+
+    provider.release.set()
+    _wait_for(lambda: len(service.get_image_workflow_snapshot(str(workspace["id"]))["images"]) == 2)
+
+    final_snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
+    assert final_snapshot["generation_queue"]["running"] is False
+    assert final_snapshot["generation_queue"]["count"] == 0
+    assert final_snapshot["generation_queue"]["last_error"] in {"", None}
+    assert provider.prompts == ["first queued figurine", "second queued figurine"]
+
+
+def test_video_studio_creates_previewable_workspace(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+
+    created = service.create_studio_workspace(
+        workspace_kind="studio_video",
+        artifact_title="Motion Lab",
+        template_kind="video-gen",
+        theme_prompt="Short motion studies and image-to-video experiments.",
+    )
+
+    workspace = created["workspace"]
+    repo_path = Path(str(workspace["repo_path"]))
+
+    assert workspace["workspace_kind"] == "studio_video"
+    assert workspace["preview_state"] == "ready"
+    assert workspace["preview_url"] == f"/studio/preview/{workspace['id']}/index.html"
+    assert (repo_path / "video.js").exists()
+    assert (repo_path / "index.html").exists()
+    assert "Motion Lab Studio" == created["conversation"]["title"]
+
+
+def test_image_studio_does_not_publish_static_preview(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Prop Forge",
+        template_kind="image-gen",
+    )["workspace"]
+
+    refreshed = service.refresh_studio_preview(str(workspace["id"]))
+    assert refreshed["preview_state"] == "native"
+    assert refreshed["preview_url"] is None
+
+    try:
+        service.publish_studio_workspace(str(workspace["id"]))
+    except ValueError as exc:
+        assert "publish is not available" in str(exc)
+    else:
+        raise AssertionError("Expected Image Studio publish to be unavailable")
+
+
+def test_image_studio_polls_image_to_3d_provider_jobs(tmp_path: Path) -> None:
+    class Polling3DProvider:
+        name = "polling-3d"
+
+        def __init__(self) -> None:
+            self.created_jobs: list[dict[str, object]] = []
+            self.poll_count = 0
+            self._output_dir: Path | None = None
+            self._image_path: Path | None = None
+            self._external_job_id = "polling-job-123"
+
+        def create_job(self, *, image_path: Path, output_dir: Path, prompt_context: str | None = None) -> str:
+            self.created_jobs.append(
+                {
+                    "image_path": image_path,
+                    "output_dir": output_dir,
+                    "prompt_context": prompt_context,
+                }
+            )
+            self._output_dir = output_dir
+            self._image_path = image_path
+            return self._external_job_id
+
+        def get_job_status(self, external_job_id: str) -> ImageTo3DJobUpdate:
+            assert external_job_id == self._external_job_id
+            self.poll_count += 1
+            if self.poll_count == 1:
+                return ImageTo3DJobUpdate(status="queued")
+            if self.poll_count == 2:
+                return ImageTo3DJobUpdate(status="running")
+            assert self._output_dir is not None
+            assert self._image_path is not None
+            input_path = self._output_dir / "input.png"
+            preview_path = self._output_dir / "preview.png"
+            model_path = self._output_dir / "model.glb"
+            metadata_path = self._output_dir / "metadata.json"
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            if not input_path.exists():
+                input_path.write_bytes(self._image_path.read_bytes())
+            if not preview_path.exists():
+                preview_path.write_bytes(_tiny_png_bytes())
+            if not model_path.exists():
+                model_path.write_bytes(b"glTF")
+            metadata_payload = {"generator": self.name, "mesh_faces": 12}
+            metadata_path.write_text(json.dumps(metadata_payload), encoding="utf-8")
+            return ImageTo3DJobUpdate(
+                status="succeeded",
+                artifacts={
+                    "input_png": input_path,
+                    "preview_png": preview_path,
+                    "glb": model_path,
+                    "metadata_json": metadata_path,
+                },
+                metadata=metadata_payload,
+            )
+
+    provider = Polling3DProvider()
+    service = AgentRunnerService(
+        ServiceConfig(
+            repo_path=tmp_path,
+            artifacts_dir=tmp_path / ".agent-runner",
+            settings_path=tmp_path / ".agent-runner" / "app-settings.json",
+            provider=ProviderKind.CODEX,
+            codex_bin="codex",
+            model="gpt-5.3-codex",
+            ollama_host="http://127.0.0.1:11434",
+            extra_access_dir=None,
+            max_step_retries=2,
+            phase_timeout_seconds=10,
+            check_commands=[],
+            dry_run=False,
+        ),
+        phase_client=FakePhaseClient(message="Studio ready"),
+        image_workflow_provider=default_mock_provider(),
+        image_to_3d_provider=provider,
+    )
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Mesh Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    uploaded = service.upload_image_asset(
+        workspace_id=str(workspace["id"]),
+        file_name="source.png",
+        mime_type="image/png",
+        data=_tiny_png_bytes(),
+    )
+
+    started = service.make_image_3d(
+        workspace_id=str(workspace["id"]),
+        source_image_id=str(uploaded["selected_image_id"]),
+    )
+    assert started["job_id"].startswith("job_")
+
+    _wait_for(
+        lambda: any(
+            item["status"] == "succeeded"
+            for item in service.get_image_workflow_snapshot(str(workspace["id"]))["jobs"]
+        )
+    )
+    snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
+    assert snapshot["jobs"][0]["provider"] == "polling-3d"
+    assert snapshot["jobs"][0]["provider_job_id"] == "polling-job-123"
+    assert snapshot["jobs"][0]["artifacts"]["glb"].startswith(f"/workspace-media/{workspace['id']}/outputs/image_to_3d/")
+    assert provider.poll_count >= 3
+    assert provider.created_jobs[0]["prompt_context"] is None
+
+
+def test_image_studio_auto_refine_retries_and_records_review_metadata(tmp_path: Path, monkeypatch) -> None:
+    class RasterProvider:
+        name = "test-raster"
+
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def generate_images(self, *, prompt: str, count: int) -> list[GeneratedImageCandidate]:
+            self.prompts.append(prompt)
+            return [
+                GeneratedImageCandidate(
+                    label="Candidate 1",
+                    file=StoredFile(
+                        file_name="candidate.png",
+                        mime_type="image/png",
+                        data=_tiny_png_bytes(),
+                    ),
+                    metadata={"provider": self.name},
+                )
+            ]
+
+        def image_to_3d(self, *, image_path: Path, prompt_context: str | None = None):
+            return default_mock_provider().image_to_3d(image_path=image_path, prompt_context=prompt_context)
+
+    review_results = iter(
+        [
+            {
+                "review_status": "fail",
+                "overall_score": 0.48,
+                "notes": "Subject feels muddy.",
+                "judge_model": "qwen3.5:9b",
+            },
+            {
+                "review_status": "pass",
+                "overall_score": 0.89,
+                "notes": "Much clearer.",
+                "judge_model": "qwen3.5:9b",
+            },
+        ]
+    )
+    monkeypatch.setattr("agent_runner.image_workflow.list_local_ollama_models", lambda: {"qwen3.5:9b"})
+    monkeypatch.setattr("agent_runner.image_workflow.review_generated_candidate", lambda **kwargs: next(review_results))
+    monkeypatch.setattr(
+        "agent_runner.image_workflow.rewrite_prompt_from_review",
+        lambda **kwargs: f"{kwargs['current_prompt']}, clearer focal point",
+    )
+
+    service = AgentRunnerService(
+        ServiceConfig(
+            repo_path=tmp_path,
+            artifacts_dir=tmp_path / ".agent-runner",
+            settings_path=tmp_path / ".agent-runner" / "app-settings.json",
+            provider=ProviderKind.CODEX,
+            codex_bin="codex",
+            model="gpt-5.3-codex",
+            ollama_host="http://127.0.0.1:11434",
+            extra_access_dir=None,
+            max_step_retries=2,
+            phase_timeout_seconds=10,
+            check_commands=[],
+            dry_run=False,
+        ),
+        phase_client=FakePhaseClient(message="Studio ready"),
+        image_workflow_provider=RasterProvider(),
+        image_to_3d_provider=MockImageTo3DProvider(),
+    )
+    created = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Refine Lab",
+        template_kind="image-gen",
+    )
+
+    generated = service.generate_image_candidates(
+        workspace_id=str(created["workspace"]["id"]),
+        prompt="Toy astronaut figurine",
+        auto_refine={"enabled": True, "threshold": 0.72, "max_retries": 1},
+    )
+
+    image = generated["images"][0]
+    assert image["review_status"] == "pass"
+    assert image["review_attempts"] == 2
+    assert "Much clearer." in str(image["review_notes"])
+    assert service._image_workflow_provider.prompts == [
+        "Toy astronaut figurine",
+        "Toy astronaut figurine, clearer focal point",
+    ]
+
+
+def test_image_studio_describes_reference_and_uses_small_generation_profiles(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_runner.service.describe_reference_image",
+        lambda **kwargs: {
+            "source_image_name": kwargs["image_path"].name,
+            "vision_model": "qwen3.5:9b",
+            "prompt_model": "qwen3.5:9b",
+            "reference": {
+                "subject": "teenage boy in military attire",
+                "scene": "snowy military encampment at dusk",
+                "composition": "full-body central portrait with campfires behind him",
+                "palette": "cool blue-gray with warm firelight",
+                "lighting": "dusky ambient light with orange campfire glow",
+                "style": "painterly realism",
+                "mood": "somber and weary",
+                "important_details": ["tents", "snow", "campfires"],
+                "recreation_prompt": "teenage boy in a blue-gray coat standing in a snowy encampment at dusk",
+            },
+            "reference_summary": "teenage boy in a snowy military encampment at dusk, with a somber and weary tone.",
+            "suggested_prompt": "teenage boy in a blue-gray coat standing in a snowy encampment at dusk",
+            "notes": "Loaded into the generator.",
+            "raw_reference_response": "{}",
+            "raw_prompt_response": "{}",
+        },
+    )
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Reference Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    uploaded = service.upload_image_asset(
+        workspace_id=str(workspace["id"]),
+        file_name="reference.png",
+        mime_type="image/png",
+        data=_tiny_png_bytes(),
+    )
+
+    described = service.describe_image_reference(
+        workspace_id=str(workspace["id"]),
+        source_image_id=str(uploaded["selected_image_id"]),
+    )
+    assert described["reference"]["suggested_prompt"] == "teenage boy in a blue-gray coat standing in a snowy encampment at dusk"
+
+    generated = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt=described["reference"]["suggested_prompt"],
+        count=1,
+        size_profile_id="square-768x768",
+    )
+
+    image = generated["images"][0]
+    assert image["metadata"]["size_profile_id"] == "square-768x768"
+    assert image["metadata"]["width"] == 768
+    assert image["metadata"]["height"] == 768
+
+    snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
+    assert snapshot["default_generation_count"] == 1
+    assert snapshot["generation_count_options"] == [1, 2, 3, 4]
+    assert snapshot["default_generation_profile_id"] == "portrait-768x1024"
+    assert snapshot["generation_profiles"][0]["id"] == "portrait-768x1024"
+    assert snapshot["default_generation_passes"] == 2
+    assert snapshot["generation_pass_options"] == [2, 4, 8, 12]
+
+
+def test_image_studio_passes_requested_step_count_to_provider(tmp_path: Path) -> None:
+    class PassRecordingProvider:
+        name = "pass-recorder"
+
+        def __init__(self) -> None:
+            self.requests: list[dict[str, object]] = []
+
+        def generate_images(self, *, prompt: str, count: int, size_profile_id: str | None = None, passes: int | None = None):
+            self.requests.append(
+                {
+                    "prompt": prompt,
+                    "count": count,
+                    "size_profile_id": size_profile_id,
+                    "passes": passes,
+                }
+            )
+            return [
+                GeneratedImageCandidate(
+                    label="Candidate 1",
+                    file=StoredFile(
+                        file_name="candidate.png",
+                        mime_type="image/png",
+                        data=_tiny_png_bytes(),
+                    ),
+                    metadata={"provider": self.name, "steps": passes},
+                )
+            ]
+
+    provider = PassRecordingProvider()
+    service = AgentRunnerService(
+        ServiceConfig(
+            repo_path=tmp_path,
+            artifacts_dir=tmp_path / ".agent-runner",
+            settings_path=tmp_path / ".agent-runner" / "app-settings.json",
+            provider=ProviderKind.CODEX,
+            codex_bin="codex",
+            model="gpt-5.3-codex",
+            ollama_host="http://127.0.0.1:11434",
+            extra_access_dir=None,
+            max_step_retries=2,
+            phase_timeout_seconds=10,
+            check_commands=[],
+            dry_run=False,
+        ),
+        phase_client=FakePhaseClient(message="Studio ready"),
+        image_workflow_provider=provider,
+        image_to_3d_provider=MockImageTo3DProvider(),
+        image_to_video_provider=MockImageToVideoProvider(),
+    )
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Pass Lab",
+        template_kind="image-gen",
+    )["workspace"]
+
+    generated = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt="Painted explorer figurine",
+        count=1,
+        passes=12,
+    )
+
+    assert provider.requests[0]["passes"] == 12
+    assert generated["images"][0]["metadata"]["steps"] == 12
+
+
+def test_image_studio_defaults_generation_count_to_one(tmp_path: Path) -> None:
+    class CountRecordingProvider:
+        name = "count-recorder"
+
+        def __init__(self) -> None:
+            self.requests: list[dict[str, object]] = []
+
+        def generate_images(self, *, prompt: str, count: int, size_profile_id: str | None = None, passes: int | None = None):
+            self.requests.append(
+                {
+                    "prompt": prompt,
+                    "count": count,
+                    "size_profile_id": size_profile_id,
+                    "passes": passes,
+                }
+            )
+            return [
+                GeneratedImageCandidate(
+                    label="Candidate 1",
+                    file=StoredFile(
+                        file_name="candidate.png",
+                        mime_type="image/png",
+                        data=_tiny_png_bytes(),
+                    ),
+                    metadata={"provider": self.name},
+                )
+            ]
+
+    provider = CountRecordingProvider()
+    service = AgentRunnerService(
+        ServiceConfig(
+            repo_path=tmp_path,
+            artifacts_dir=tmp_path / ".agent-runner",
+            settings_path=tmp_path / ".agent-runner" / "app-settings.json",
+            provider=ProviderKind.CODEX,
+            codex_bin="codex",
+            model="gpt-5.3-codex",
+            ollama_host="http://127.0.0.1:11434",
+            extra_access_dir=None,
+            max_step_retries=2,
+            phase_timeout_seconds=10,
+            check_commands=[],
+            dry_run=False,
+        ),
+        phase_client=FakePhaseClient(message="Studio ready"),
+        image_workflow_provider=provider,
+        image_to_3d_provider=MockImageTo3DProvider(),
+        image_to_video_provider=MockImageToVideoProvider(),
+    )
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Count Lab",
+        template_kind="image-gen",
+    )["workspace"]
+
+    generated = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt="Painted explorer figurine",
+    )
+
+    assert provider.requests[0]["count"] == 1
+    assert len(generated["images"]) == 1
+
+
+def test_image_studio_opens_asset_folder(tmp_path: Path, monkeypatch) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Folder Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr("agent_runner.service.subprocess.run", fake_run)
+
+    opened = service.open_image_asset_folder(workspace_id=str(workspace["id"]))
+
+    assert opened["workspace_id"] == str(workspace["id"])
+    assert opened["opened"] is True
+    assert Path(str(opened["folder_path"])).exists()
+    assert captured["cmd"][0] in {"open", "xdg-open", "explorer"}
+
+
+def test_image_studio_imports_asset_from_local_path(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Drop Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    source = tmp_path / "finder-drop.png"
+    source.write_bytes(_tiny_png_bytes())
+
+    imported = service.import_image_asset_from_path(
+        workspace_id=str(workspace["id"]),
+        image_path=str(source),
+    )
+
+    assert imported["selected_image_id"]
+    selected = next(item for item in imported["images"] if item["id"] == imported["selected_image_id"])
+    assert selected["source"] == "upload"
+    assert selected["label"] == "finder-drop"
+
+
+def test_image_studio_deletes_image_asset_and_related_outputs(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Delete Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+
+    generated = service.generate_image_candidates(
+        workspace_id=workspace_id,
+        prompt="Painted explorer figurine",
+        count=1,
+    )
+    source_image_id = str(generated["selected_image_id"])
+    service.make_image_3d(workspace_id=workspace_id, source_image_id=source_image_id)
+    _wait_for(
+        lambda: any(
+            item["status"] == "succeeded"
+            for item in service.get_image_workflow_snapshot(workspace_id)["jobs"]
+        )
+    )
+
+    store = service._image_store(workspace_id)
+    asset = store.get_asset(source_image_id)
+    asset_path = store.asset_path(asset)
+    job_output_dirs = [service.conversation_store.workspace_dir(workspace_id) / job.output_dir for job in store.list_jobs()]
+
+    deleted = service.delete_image_asset(workspace_id=workspace_id, image_id=source_image_id)
+
+    assert deleted["selected_image_id"] is None
+    assert all(item["id"] != source_image_id for item in deleted["images"])
+    assert all(item["source_image_id"] != source_image_id for item in deleted["jobs"])
+    assert not asset_path.exists()
+    assert all(not output_dir.exists() for output_dir in job_output_dirs)
+
+
+def test_image_studio_snapshot_prunes_missing_source_files(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Prune Lab",
+        template_kind="image-gen",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+
+    generated = service.generate_image_candidates(
+        workspace_id=workspace_id,
+        prompt="Painted explorer figurine",
+        count=1,
+    )
+    source_image_id = str(generated["selected_image_id"])
+    service.make_image_3d(workspace_id=workspace_id, source_image_id=source_image_id)
+    _wait_for(
+        lambda: any(
+            item["status"] == "succeeded"
+            for item in service.get_image_workflow_snapshot(workspace_id)["jobs"]
+        )
+    )
+
+    store = service._image_store(workspace_id)
+    asset = store.get_asset(source_image_id)
+    asset_path = store.asset_path(asset)
+    job_output_dirs = [service.conversation_store.workspace_dir(workspace_id) / job.output_dir for job in store.list_jobs()]
+
+    asset_path.unlink()
+    snapshot = service.get_image_workflow_snapshot(workspace_id)
+
+    assert snapshot["selected_image_id"] is None
+    assert all(item["id"] != source_image_id for item in snapshot["images"])
+    assert all(item["source_image_id"] != source_image_id for item in snapshot["jobs"])
+    assert all(not output_dir.exists() for output_dir in job_output_dirs)
+
+
+def test_image_studio_keeps_composition_with_backend_managed_seed(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Seed Lab",
+        template_kind="image-gen",
+    )["workspace"]
+
+    first = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt="Painted explorer figurine",
+        count=1,
+        size_profile_id="portrait-768x1024",
+    )
+    source_image = first["images"][0]
+
+    second = service.generate_image_candidates(
+        workspace_id=str(workspace["id"]),
+        prompt="Painted explorer figurine with brighter rim light",
+        count=1,
+        size_profile_id="portrait-768x1024",
+        composition_source_image_id=str(source_image["id"]),
+        remix_mode="remix",
+    )
+
+    remixed = second["images"][0]
+    assert remixed["metadata"]["composition_source_image_id"] == source_image["id"]
+    assert remixed["metadata"]["composition_source_label"] == source_image["label"]
+    assert remixed["metadata"]["seed_reused"] is True
+    assert remixed["metadata"]["generation_mode"] == "remix"
+    assert remixed["metadata"]["init_image_used"] is True
+    assert remixed["metadata"]["seed"] == source_image["metadata"]["seed"]
 
 
 def test_imported_studio_workspace_preserves_custom_preview_entry_path(tmp_path: Path) -> None:
@@ -640,6 +1520,9 @@ def _make_service(tmp_path: Path, *, phase_client) -> AgentRunnerService:
             dry_run=False,
         ),
         phase_client=phase_client,
+        image_workflow_provider=default_mock_provider(),
+        image_to_3d_provider=MockImageTo3DProvider(),
+        image_to_video_provider=MockImageToVideoProvider(),
     )
 
 
@@ -660,3 +1543,15 @@ def _wait_for(predicate, timeout: float = 2.0) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("Timed out waiting for condition")
+
+
+def _tiny_png_bytes() -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x04\x00\x01"
+        b"\x0b\xe7\x02\x9d"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )

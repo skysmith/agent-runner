@@ -37,11 +37,13 @@ def builder_prompt(
     prior_feedback: str | None,
     mind_map_text: str = "",
     conversation_context: str = "",
+    available_checks: list[str] | None = None,
 ) -> str:
     constraints = "\n".join(f"- {c}" for c in task.constraints) or "- none"
     success = "\n".join(f"- {c}" for c in task.success_criteria)
     step_done = "\n".join(f"- {c}" for c in step.done_criteria) or "- none"
     feedback = prior_feedback.strip() if prior_feedback else "none"
+    checks = "\n".join(f"- {cmd}" for cmd in (available_checks or [])) or "- none"
     mind_map_block = render_mind_map_block(mind_map_text)
     conversation_block = _render_conversation_block(conversation_context)
     return f"""You are the BUILDER.
@@ -64,6 +66,9 @@ CONSTRAINTS:
 
 SUCCESS CRITERIA:
 {success}
+
+AVAILABLE CHECK COMMANDS:
+{checks}
 
 REVIEWER FEEDBACK FROM LAST ATTEMPT:
 {feedback}

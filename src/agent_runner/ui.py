@@ -34,6 +34,7 @@ from tkinter import ttk
 
 from .context_assembler import ContextAssembler, EffectiveContext
 from .conversation_store import ConversationStore, WorkspaceConversationController
+from .image_workflow import default_image_asset_export_root
 from .models import AppSettings, ChecksPolicy, ProviderKind, RunMode, WorkspaceSettings
 from .preflight import generate_clarifying_questions
 from .providers import ExecutionRequest, ProviderRouter, probe_ollama
@@ -1123,7 +1124,13 @@ class WorkspacePane:
         record = self.controller.active_conversation()
         if record.id != conversation_id:
             return
-        summary = self.app.context_assembler.refresh_summary(record)
+        provider, model, _, _ = self._effective_run_settings()
+        summary = self.app.context_assembler.refresh_summary(
+            record,
+            provider=provider,
+            model=model,
+            configured_context_char_cap=self.app_settings.context_char_cap,
+        )
         if summary != record.summary:
             self.controller.update_summary(conversation_id, summary)
 
@@ -1233,62 +1240,38 @@ class ImageGenPane:
         self.refresh_status()
 
     def tab_title(self) -> str:
-        return "Image Gen"
+        return "Image Studio"
 
     def _build_ui(self) -> None:
         header = ttk.Frame(self.frame, style="Root.TFrame")
         header.pack(fill="x")
-        ttk.Label(header, text="Image Gen Dashboard", style="Headline.TLabel").pack(anchor="w")
-        ttk.Label(header, text="Launch and open the ai-art dashboard from here.", style="Subhead.TLabel").pack(
+        ttk.Label(header, text="Native Image Studio", style="Headline.TLabel").pack(anchor="w")
+        ttk.Label(header, text="Open Alcove's browser UI for generation, uploads, and image review.", style="Subhead.TLabel").pack(
             anchor="w", pady=(2, 12)
         )
 
         panel = ttk.Frame(self.frame, style="Surface.TFrame", padding=(16, 14, 16, 14))
         panel.pack(fill="x")
-        ttk.Label(panel, text="DASHBOARD", style="SectionEyebrow.TLabel").pack(anchor="w")
-        ttk.Label(panel, text="ai-art status", style="SectionTitle.TLabel").pack(anchor="w", pady=(2, 8))
+        ttk.Label(panel, text="WORKFLOW", style="SectionEyebrow.TLabel").pack(anchor="w")
+        ttk.Label(panel, text="Image Studio status", style="SectionTitle.TLabel").pack(anchor="w", pady=(2, 8))
         ttk.Label(panel, textvariable=self.status_var, style="Body.TLabel").pack(anchor="w", pady=(0, 8))
         ttk.Label(panel, textvariable=self.url_var, style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
 
         actions = ttk.Frame(panel, style="Surface.TFrame")
         actions.pack(fill="x")
         ttk.Button(actions, text="Refresh", command=self.refresh_status).pack(side="left")
-        ttk.Button(actions, text="Launch Dashboard", command=self.launch_dashboard).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Open Dashboard URL", style="Run.TButton", command=self.open_dashboard_url).pack(
+        ttk.Button(actions, text="Open Alcove UI", command=self.launch_dashboard).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Open Browser URL", style="Run.TButton", command=self.open_dashboard_url).pack(
             side="right"
         )
 
     def refresh_status(self) -> None:
-        ai_art_dir = self.app.ai_art_dir
-        if ai_art_dir is None:
-            self.status_var.set("ai-art directory not found.")
-            self.url_var.set("")
-            return
-        url_file = ai_art_dir / ".dashboard-url"
-        if url_file.exists():
-            url = url_file.read_text(encoding="utf-8").strip()
-            self.url_var.set(url)
-            self.status_var.set("Dashboard URL available.")
-        else:
-            self.url_var.set("")
-            self.status_var.set("Dashboard URL not found. Launch first.")
+        self.url_var.set(self.app._companion_browser_url())
+        self.status_var.set("Native image workflows live in Alcove's browser UI.")
 
     def launch_dashboard(self) -> None:
-        ai_art_dir = self.app.ai_art_dir
-        if ai_art_dir is None:
-            messagebox.showerror("Alcove", "ai-art directory not found.")
-            return
-        launcher = ai_art_dir / "launch_dashboard.sh"
-        if not launcher.exists():
-            messagebox.showerror("Alcove", f"Missing launcher: {launcher}")
-            return
-        try:
-            subprocess.Popen(["/bin/bash", str(launcher)], cwd=str(ai_art_dir))
-        except Exception as exc:  # pragma: no cover - GUI fallback
-            messagebox.showerror("Alcove", f"Failed to launch dashboard: {exc}")
-            return
-        self.status_var.set("Launch requested. Refreshing status...")
-        self.frame.after(1200, self.refresh_status)
+        self.app.open_companion_ui(parent=self.frame.winfo_toplevel())
+        self.refresh_status()
 
     def open_dashboard_url(self) -> None:
         url = self.url_var.get().strip()
@@ -1296,7 +1279,7 @@ class ImageGenPane:
             self.refresh_status()
             url = self.url_var.get().strip()
         if not url:
-            messagebox.showerror("Alcove", "No dashboard URL found yet.")
+            messagebox.showerror("Alcove", "No browser URL found yet.")
             return
         webbrowser.open(url)
 
@@ -1336,7 +1319,7 @@ class WindowController:
         file_menu = Menu(menubar, tearoff=0)
         file_menu.add_command(label="New Window", command=lambda: self.app.create_window())
         file_menu.add_command(label="New Tab", command=self.add_workspace_tab)
-        file_menu.add_command(label="New Image Gen Tab", command=self.add_image_gen_tab)
+        file_menu.add_command(label="New Image Studio Tab", command=self.add_image_gen_tab)
         file_menu.add_command(label="Close Tab", command=self.close_active_tab)
         if not is_macos:
             file_menu.add_separator()
@@ -1506,6 +1489,7 @@ class WorkspaceApp:
                 phase_timeout_seconds=bootstrap.phase_timeout_seconds,
                 check_commands=list(bootstrap.check_commands),
                 dry_run=bootstrap.dry_run,
+                image_export_root=default_image_asset_export_root(),
             ),
             phase_client=self.phase_client,
             context_assembler=self.context_assembler,
@@ -2107,6 +2091,8 @@ class WorkspaceApp:
                 animate_status_scenes=bool(animate_var.get()),
                 max_step_retries=max(0, default_loop_count - 1),
                 phase_timeout_seconds=max(1, int(timeout_var.get().strip() or "1")),
+                context_char_cap=old_settings.context_char_cap,
+                arcade_repo_path=old_settings.arcade_repo_path,
                 default_checks=checks,
             )
             save_app_settings(self.settings_path, self.app_settings)

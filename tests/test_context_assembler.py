@@ -72,3 +72,25 @@ def test_long_conversation_uses_summary_and_recent_messages(tmp_path: Path) -> N
     assert "RECENT MESSAGES:" in context.conversation_context
     assert "recent user" in context.conversation_context
     assert "LATEST USER DIRECTIVE:\nship it" in context.current_input
+
+
+def test_codex_context_metrics_use_larger_default_budget() -> None:
+    assembler = ContextAssembler()
+    conversation = ConversationRecord(
+        id="conv-1",
+        workspace_id="workspace-1",
+        title="Codex thread",
+        created_at="2026-04-04T12:00:00-06:00",
+        updated_at="2026-04-04T12:00:00-06:00",
+        messages=[_message(1, "user", "hello there")],
+    )
+
+    metrics = assembler.conversation_metrics(
+        conversation,
+        provider=ProviderKind.CODEX,
+        model="gpt-5.4",
+    )
+
+    assert metrics["context_char_cap"] == 100000
+    assert metrics["cap_source"] == "provider-default"
+    assert metrics["summary_active"] is False

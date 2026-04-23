@@ -82,7 +82,7 @@ A single browser UI serves:
 - composer
 - run status
 - settings
-- image-gen links / external integrations
+- native studio entry points, including Image Studio and Video Studio
 
 Suggested direction:
 

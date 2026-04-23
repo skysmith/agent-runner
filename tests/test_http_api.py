@@ -11,7 +11,8 @@ from threading import Event
 from pathlib import Path
 
 from agent_runner.codex_client import CodexExecResult
-from agent_runner.http_api import create_server
+from agent_runner.http_api import MAX_JSON_BODY_BYTES, create_server
+from agent_runner.image_workflow import MockImageTo3DProvider, MockImageToVideoProvider, default_mock_provider
 from agent_runner.models import ProviderKind
 from agent_runner.service import AgentRunnerService, ServiceConfig
 
@@ -138,6 +139,247 @@ def test_root_route_preserves_run_mode_preferences_in_web_ui(tmp_path: Path) -> 
         server.server_close()
 
 
+def test_image_workflow_endpoints_generate_upload_and_serve_artifacts(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    monkeypatch.setattr(
+        "agent_runner.service.subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    created = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Figurine Lab",
+        template_kind="image-gen",
+    )
+    workspace_id = str(created["workspace"]["id"])
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        generated = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/generate",
+            {"prompt": "A toy robot figurine", "count": 2, "passes": 12},
+        )
+        assert generated["accepted"] is True
+        _wait_for(lambda: len(_get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["images"]) == 2)
+        generated_workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
+        assert generated_workflow["generation_count_options"] == [1, 2, 3, 4]
+        assert generated_workflow["default_generation_count"] == 1
+        assert generated_workflow["generation_pass_options"] == [2, 4, 8, 12]
+        assert generated_workflow["default_generation_passes"] == 2
+        image_url = generated_workflow["images"][0]["url"]
+        assert image_url.startswith(f"/workspace-media/{workspace_id}/")
+
+        opened = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/open-folder",
+            {},
+        )
+        assert opened["opened"] is True
+        assert (
+            opened["folder_path"].endswith("/Generations")
+            or "/Generations/" in opened["folder_path"]
+            or opened["folder_path"].endswith("/image-workflow/assets")
+        )
+
+        uploaded = _post_multipart(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/assets",
+            fields={},
+            files=[("asset", "upload.png", "image/png", b"mock-image-bytes")],
+        )
+        assert any(item["source"] == "upload" for item in uploaded["images"])
+
+        dropped_path = tmp_path / "finder-drop.png"
+        dropped_path.write_bytes(b"mock-image-bytes")
+        imported = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/import-path",
+            {"image_path": str(dropped_path)},
+        )
+        assert any(item["label"] == "finder-drop" for item in imported["images"])
+
+        animated = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/animate",
+            {"source_image_id": generated_workflow["selected_image_id"]},
+        )
+        assert animated["job_id"].startswith("job_")
+
+        started = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/make-3d",
+            {"source_image_id": generated_workflow["selected_image_id"]},
+        )
+        assert started["job_id"].startswith("job_")
+
+        _wait_for(
+            lambda: any(
+                item["status"] == "succeeded"
+                for item in _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["jobs"]
+            )
+        )
+        _wait_for(
+            lambda: any(
+                item["status"] == "succeeded"
+                for item in _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["video_jobs"]
+            )
+        )
+        workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
+        assert workflow["video_jobs"][0]["artifacts"]["mp4"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_video/"
+        )
+        assert workflow["video_jobs"][0]["artifacts"]["poster_png"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_video/"
+        )
+        assert workflow["video_jobs"][0]["artifacts"]["metadata_json"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_video/"
+        )
+        assert workflow["jobs"][0]["artifacts"]["input_png"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_3d/"
+        )
+        assert workflow["jobs"][0]["artifacts"]["preview_png"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_3d/"
+        )
+        assert workflow["jobs"][0]["artifacts"]["metadata_json"].startswith(
+            f"/workspace-media/{workspace_id}/outputs/image_to_3d/"
+        )
+        preview_url = workflow["images"][0]["url"]
+        preview_response = urllib.request.urlopen(f"{base}{preview_url}")
+        assert preview_response.status == 200
+        assert preview_response.headers.get_content_type().startswith("image/")
+
+        mp4_url = workflow["video_jobs"][0]["artifacts"]["mp4"]
+        mp4_response = urllib.request.urlopen(f"{base}{mp4_url}")
+        assert mp4_response.status == 200
+        assert mp4_response.headers.get_content_type() == "video/mp4"
+
+        glb_url = workflow["jobs"][0]["artifacts"]["glb"]
+        glb_response = urllib.request.urlopen(f"{base}{glb_url}")
+        assert glb_response.status == 200
+        deleted = _delete_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/assets/{generated_workflow['selected_image_id']}"
+        )
+        assert all(item["id"] != generated_workflow["selected_image_id"] for item in deleted["images"])
+        assert all(item["source_image_id"] != generated_workflow["selected_image_id"] for item in deleted["jobs"])
+        assert all(item["source_image_id"] != generated_workflow["selected_image_id"] for item in deleted["video_jobs"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_image_workflow_describe_reference_and_size_profile_endpoint(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_runner.service.describe_reference_image",
+        lambda **kwargs: {
+            "source_image_name": kwargs["image_path"].name,
+            "vision_model": "qwen3.5:9b",
+            "prompt_model": "qwen3.5:9b",
+            "reference": {
+                "subject": "teenage boy in military attire",
+                "scene": "snowy encampment at dusk",
+                "composition": "central figure with fires behind him",
+                "palette": "blue-gray with warm orange firelight",
+                "lighting": "dusky winter light",
+                "style": "painterly realism",
+                "mood": "somber",
+                "important_details": ["tents", "snow", "campfires"],
+                "recreation_prompt": "teenage boy in a blue-gray coat standing in a snowy encampment at dusk",
+            },
+            "reference_summary": "teenage boy in a snowy encampment at dusk, with a somber tone.",
+            "suggested_prompt": "teenage boy in a blue-gray coat standing in a snowy encampment at dusk",
+            "notes": "Loaded into the generator.",
+            "raw_reference_response": "{}",
+            "raw_prompt_response": "{}",
+        },
+    )
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Reference Lab",
+        template_kind="image-gen",
+    )
+    workspace_id = str(created["workspace"]["id"])
+    uploaded = service.upload_image_asset(
+        workspace_id=workspace_id,
+        file_name="reference.png",
+        mime_type="image/png",
+        data=b"mock-image-bytes",
+    )
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        described = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/describe-reference",
+            {"source_image_id": uploaded["selected_image_id"]},
+        )
+        assert described["reference"]["suggested_prompt"] == "teenage boy in a blue-gray coat standing in a snowy encampment at dusk"
+
+        generated = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/generate",
+            {
+                "prompt": described["reference"]["suggested_prompt"],
+                "count": 1,
+                "size_profile_id": "landscape-1024x576",
+            },
+        )
+        assert generated["accepted"] is True
+        _wait_for(lambda: len(_get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["images"]) >= 2)
+        workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
+        generated_image = next(item for item in workflow["images"] if item["source"] == "generated")
+        assert generated_image["metadata"]["size_profile_id"] == "landscape-1024x576"
+        assert generated_image["metadata"]["width"] == 1024
+        assert generated_image["metadata"]["height"] == 576
+        assert workflow["generation_profiles"][0]["id"] == "portrait-768x1024"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_image_workflow_generate_endpoint_reuses_seed_and_reference_image(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_studio_workspace(
+        workspace_kind="studio_image",
+        artifact_title="Seed Lab",
+        template_kind="image-gen",
+    )
+    workspace_id = str(created["workspace"]["id"])
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        initial = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/generate",
+            {"prompt": "Painted explorer figurine", "count": 1},
+        )
+        assert initial["accepted"] is True
+        _wait_for(lambda: len(_get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["images"]) == 1)
+        first_workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
+        source_image = first_workflow["images"][0]
+
+        remixed = _post_json(
+            f"{base}/api/workspaces/{workspace_id}/image-workflow/generate",
+            {
+                "prompt": "Painted explorer figurine with brighter rim light",
+                "count": 1,
+                "composition_source_image_id": source_image["id"],
+                "remix_mode": "match",
+            },
+        )
+        assert remixed["accepted"] is True
+        _wait_for(lambda: len(_get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["images"]) == 2)
+        workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
+        generated_image = workflow["images"][0]
+        assert generated_image["metadata"]["composition_source_image_id"] == source_image["id"]
+        assert generated_image["metadata"]["seed_reused"] is True
+        assert generated_image["metadata"]["generation_mode"] == "match"
+        assert generated_image["metadata"]["seed"] == source_image["metadata"]["seed"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     repo = tmp_path / "finance-dashboard"
@@ -164,6 +406,34 @@ def test_workspace_define_and_active_repositories_endpoints(tmp_path: Path) -> N
         )
         assert isinstance(active["repositories"], list)
         assert any(item["repo_path"] == str(repo) for item in active["repositories"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_can_be_renamed_and_deleted_via_api(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    service.create_conversation("workspace-1", title="Desktop thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        renamed = _patch_json(
+            f"{base}/api/workspaces/workspace-1",
+            {
+                "display_name": "Fresh Onboarding",
+            },
+        )
+        assert renamed["id"] == "workspace-1"
+        assert renamed["display_name"] == "Fresh Onboarding"
+
+        deleted = _delete_json(f"{base}/api/workspaces/workspace-1")
+        assert deleted["ok"] is True
+        assert deleted["workspace_id"] == "workspace-1"
+
+        remaining = _get_json(f"{base}/api/workspaces")
+        assert "workspace-1" not in [workspace["id"] for workspace in remaining["workspaces"]]
     finally:
         server.shutdown()
         server.server_close()
@@ -376,23 +646,24 @@ def test_settings_and_ollama_models_endpoints(tmp_path: Path) -> None:
         settings = _get_json(f"{base}/api/settings")
         assert settings["provider"] in {"codex", "ollama"}
         assert settings["codex_bin"] == "codex"
+        assert settings["openai_model"] == "gpt-5.3-codex"
+        assert "open_source_model" in settings
+        assert settings["resolved_context_char_cap"] == 100000
         updated = _patch_json(
             f"{base}/api/settings",
             {
                 "provider": "ollama",
-                "model": "llama3.1:8b",
-                "planner_model": "qwen2.5:7b",
-                "builder_model": "qwen2.5-coder:7b",
-                "reviewer_model": "llama3.1:8b",
-                "vision_model": "qwen3-vl:4b",
-                "max_step_retries": 3,
-                "phase_timeout_seconds": 180,
+                "openai_model": "gpt-5.4",
+                "open_source_model": "llama3.1:8b",
+                "context_char_cap": 150000,
             },
         )
         assert updated["provider"] == "ollama"
         assert updated["model"] == "llama3.1:8b"
-        assert updated["planner_model"] == "qwen2.5:7b"
-        assert updated["vision_model"] == "qwen3-vl:4b"
+        assert updated["openai_model"] == "gpt-5.4"
+        assert updated["open_source_model"] == "llama3.1:8b"
+        assert updated["context_char_cap"] == 150000
+        assert updated["resolved_context_char_cap"] == 150000
         models = _get_json(f"{base}/api/providers/ollama/models")
         assert "available" in models and "models" in models and "message" in models
     finally:
@@ -619,8 +890,10 @@ def test_clear_chat_endpoint_resets_messages(tmp_path: Path) -> None:
             {"workspace_id": "workspace-1"},
         )
         assert cleared["id"] == created["id"]
+        assert cleared["title"] == "New conversation"
         assert cleared["messages"] == []
         conversation = _get_json(f"{base}/api/conversations/{created['id']}?workspace_id=workspace-1")
+        assert conversation["title"] == "New conversation"
         assert conversation["messages"] == []
     finally:
         server.shutdown()
@@ -663,6 +936,41 @@ def test_password_protected_server_requires_basic_auth(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_workspace_define_rejects_unsafe_workspace_id(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    outside_workspace = tmp_path / "outside-workspace"
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        request = urllib.request.Request(
+            f"{base}/api/workspaces",
+            data=json.dumps(
+                {
+                    "id": "../../outside-workspace",
+                    "display_name": "Oops",
+                    "repo_path": str(tmp_path),
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+            payload = json.loads(exc.read().decode("utf-8"))
+            assert "path separators" in payload["detail"].lower()
+        else:
+            raise AssertionError("Expected unsafe workspace id to be rejected")
+
+        assert not outside_workspace.exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_server_info_includes_local_token_when_repo_dirty(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     (tmp_path / "README.md").write_text("dirty\n")
@@ -690,6 +998,41 @@ def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default
         assert payload["local_url"].startswith("http://127.0.0.1:")
         assert payload["phone_enabled"] is False
         assert payload["phone_url"] is None
+        assert payload["native_transcription_available"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_native_transcription_endpoint_uses_wrapper_callable(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    requested_locales: list[str | None] = []
+
+    def transcribe(locale: str | None) -> dict[str, object]:
+        requested_locales.append(locale)
+        return {
+            "transcript": "ship the fix",
+            "locale": locale or "en-US",
+            "provider": "macos-native",
+        }
+
+    server = create_server(service, "127.0.0.1", 0, native_transcriber=transcribe)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        info = _get_json(f"{base}/api/server-info")
+        assert info["native_transcription_available"] is True
+        assert info["native_transcription_provider"] == "macos-wrapper"
+
+        payload = _post_json(
+            f"{base}/api/native/transcribe",
+            {"locale": "en-US"},
+        )
+        assert payload["transcript"] == "ship the fix"
+        assert payload["provider"] == "macos-native"
+        assert requested_locales == ["en-US"]
     finally:
         server.shutdown()
         server.server_close()
@@ -798,6 +1141,83 @@ def test_message_endpoint_rejects_loop_mode_without_dev_capability(tmp_path: Pat
         server.server_close()
 
 
+def test_message_endpoint_rejects_oversized_json_body(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_conversation("workspace-1", title="Large request thread")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = {
+            "workspace_id": "workspace-1",
+            "mode": "message",
+            "content": "x" * MAX_JSON_BODY_BYTES,
+        }
+        request = urllib.request.Request(
+            f"{base}/api/conversations/{created['id']}/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 413
+            response = json.loads(exc.read().decode("utf-8"))
+            assert "too large" in response["detail"].lower()
+        except urllib.error.URLError as exc:
+            # urllib may surface an early 413-style rejection as a broken pipe because
+            # the server closes the connection before the full oversized body is sent.
+            error_text = str(exc).lower()
+            assert "broken pipe" in error_text or "connection reset by peer" in error_text
+        else:
+            raise AssertionError("Expected oversized body to be rejected")
+        assert service.get_conversation(str(created["id"]), workspace_id="workspace-1")["messages"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_archive_and_restore_endpoints_expose_archived_threads(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    created = service.create_conversation("workspace-1", title="Archive me")
+    controller = service._controller("workspace-1")
+    controller.select_conversation(str(created["id"]))
+    controller.append_message(role="user", content="Keep this transcript")
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        archived = _post_json(
+            f"{base}/api/conversations/{created['id']}/archive",
+            {"workspace_id": "workspace-1"},
+        )
+        assert archived["conversation"]["archived_at"] is not None
+        assert archived["active_conversation_id"] != created["id"]
+
+        visible = _get_json(f"{base}/api/workspaces/workspace-1/conversations")
+        assert str(created["id"]) not in {item["id"] for item in visible["conversations"]}
+
+        all_conversations = _get_json(f"{base}/api/workspaces/workspace-1/conversations?include_archived=1")
+        archived_items = [item for item in all_conversations["conversations"] if item["id"] == str(created["id"])]
+        assert archived_items
+        assert archived_items[0]["is_archived"] is True
+
+        restored = _post_json(
+            f"{base}/api/conversations/{created['id']}/restore",
+            {"workspace_id": "workspace-1"},
+        )
+        assert restored["id"] == created["id"]
+        assert restored["active_conversation_id"] == created["id"]
+        assert restored["archived_at"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def _init_git_repo(tmp_path: Path) -> None:
     tmp_path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
@@ -825,6 +1245,9 @@ def _make_service(tmp_path: Path, phase_client=None) -> AgentRunnerService:
             dry_run=False,
         ),
         phase_client=phase_client or FakePhaseClient(),
+        image_workflow_provider=default_mock_provider(),
+        image_to_3d_provider=MockImageTo3DProvider(),
+        image_to_video_provider=MockImageToVideoProvider(),
     )
 
 
@@ -860,6 +1283,12 @@ def _patch_json(url: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="PATCH",
     )
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _delete_json(url: str) -> dict:
+    request = urllib.request.Request(url, method="DELETE")
     with urllib.request.urlopen(request) as response:
         return json.loads(response.read().decode("utf-8"))
 

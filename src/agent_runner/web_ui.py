@@ -17,8 +17,7 @@ def render_workspaces(service: AgentRunnerService) -> str:
         rows.append(
             f"""
             <a class="rail-item" href="/m/workspaces/{escape(str(workspace["id"]))}">
-              <div class="rail-title">{escape(str(workspace["id"]))}</div>
-              <div class="rail-meta">{int(workspace["conversation_count"])} conversation(s)</div>
+              <div class="rail-title">{escape(str(workspace.get("display_name") or workspace["id"]))}</div>
             </a>
             """
         )
@@ -183,6 +182,21 @@ def render_web_app() -> str:
         <meta charset="utf-8" />
         <meta name="viewport" content="__LOCKED_VIEWPORT__" />
         <title>Alcove</title>
+        <script>
+          (() => {
+            const params = new URLSearchParams(window.location.search);
+            const view = (params.get('view') || '').trim().toLowerCase();
+            if (view === 'chat') {
+              document.documentElement.classList.add('chat-breakout');
+            }
+            if (view === 'studio') {
+              document.documentElement.classList.add('studio-breakout');
+            }
+            if (view === 'image-pane') {
+              document.documentElement.classList.add('image-pane-breakout');
+            }
+          })();
+        </script>
         <style>
           :root {
             --bg: #f4f5f7;
@@ -234,6 +248,62 @@ def render_web_app() -> str:
             display: grid;
             grid-template-rows: auto minmax(0, 1fr);
             overflow: hidden;
+          }
+          .frame.has-setup-banner {
+            grid-template-rows: auto auto minmax(0, 1fr);
+          }
+          html.chat-breakout body,
+          html.studio-breakout body,
+          html.image-pane-breakout body {
+            background: var(--panel);
+          }
+          html.chat-breakout .frame,
+          html.studio-breakout .frame,
+          html.image-pane-breakout .frame {
+            grid-template-rows: minmax(0, 1fr);
+          }
+          html.chat-breakout .topbar,
+          html.chat-breakout .setup-banner,
+          html.studio-breakout .topbar,
+          html.studio-breakout .setup-banner,
+          html.image-pane-breakout .topbar,
+          html.image-pane-breakout .setup-banner {
+            display: none !important;
+          }
+          html.image-pane-breakout body,
+          html.image-pane-breakout .frame,
+          html.image-pane-breakout .review-pane,
+          html.image-pane-breakout .review-scroll {
+            background: #fff;
+          }
+          html.image-pane-breakout .review-pane {
+            display: flex !important;
+          }
+          html.image-pane-breakout .shell {
+            grid-template-columns: minmax(0, 1fr);
+          }
+          html.image-pane-breakout .thread-pane,
+          html.image-pane-breakout .pane-divider,
+          html.image-pane-breakout #review-pane-head {
+            display: none !important;
+          }
+          html.image-pane-breakout .review-scroll {
+            padding: 0;
+          }
+          html.image-pane-breakout .review-scroll.studio-scroll > .studio-shell {
+            min-height: 100dvh;
+          }
+          html.image-pane-breakout .image-studio-shell {
+            gap: 0;
+          }
+          html.image-pane-breakout .image-studio-panel {
+            border-left: 0;
+            border-right: 0;
+            border-top: 0;
+            background: #fff;
+          }
+          html.image-pane-breakout .image-studio-panel + .image-studio-panel {
+            border-top: 1px solid var(--line);
           }
           .topbar {
             display: flex;
@@ -332,6 +402,9 @@ def render_web_app() -> str:
             min-height: 0;
             display: grid;
             grid-template-columns: var(--chat-pane-width) var(--pane-divider-width) minmax(0, 1fr);
+          }
+          .shell.single-pane {
+            grid-template-columns: minmax(0, 1fr);
           }
           .setup-banner {
             display: none;
@@ -456,6 +529,13 @@ def render_web_app() -> str:
           .pane-head-main {
             min-width: 0;
           }
+          .pane-head-side {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-end;
+            gap: 6px;
+            flex-wrap: wrap;
+          }
           .pane-head-actions {
             display: flex;
             gap: 6px;
@@ -466,6 +546,30 @@ def render_web_app() -> str:
           .pane-head-actions button {
             padding: 7px 9px;
             font-size: 12px;
+          }
+          .pane-collapse-button {
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+          }
+          .pane-collapse-button:hover {
+            background: #eef1f5;
+            color: var(--ink);
+          }
+          .pane-collapse-icon {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            transform: translateX(1px);
           }
           .eyebrow {
             margin: 0;
@@ -639,6 +743,9 @@ def render_web_app() -> str:
             gap: 0;
             margin-top: 10px;
             border-top: 1px solid var(--line-soft);
+            width: 100%;
+            min-width: 0;
+            align-self: stretch;
           }
           .home-shell {
             display: grid;
@@ -707,34 +814,151 @@ def render_web_app() -> str:
           .workspace-grid.compact {
             margin-top: 10px;
           }
+          .workspace-grid.home-list {
+            margin-top: 0;
+            border-top: 0;
+            min-height: 100%;
+            padding: 0 12px 0 14px;
+            box-sizing: border-box;
+          }
+          .workspace-grid.home-list.is-active {
+            background: linear-gradient(180deg, rgba(244, 250, 246, 0.92), rgba(238, 246, 241, 0.92));
+            box-shadow: inset 0 0 0 1px rgba(50, 87, 70, 0.1);
+          }
           .workspace-card {
-            text-align: left;
             border: 0;
             border-bottom: 1px solid var(--line-soft);
+            background: transparent;
+            padding: 0;
+            width: 100%;
+            min-width: 0;
+          }
+          .workspace-card-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-width: 0;
+          }
+          .workspace-card-main {
+            flex: 1;
+            min-width: 0;
+            width: 100%;
+            text-align: left;
+            border: 0;
             background: transparent;
             padding: 10px 0;
             cursor: pointer;
           }
-          .workspace-card:hover {
+          .workspace-card-main:hover {
             background: transparent;
             color: var(--accent);
           }
-          .workspace-card:hover .workspace-card-path,
-          .workspace-card:hover .workspace-card-meta {
+          .workspace-card-main:hover .workspace-card-title {
             color: var(--accent);
+          }
+          .workspace-card-info {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .workspace-card-info:hover {
+            background: #eef1f5;
+            color: var(--ink);
+          }
+          .workspace-card-open .workspace-card-info {
+            color: var(--accent);
+          }
+          .workspace-card-info-icon {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            transform: translateX(1px);
+            transition: transform 120ms ease;
+          }
+          .workspace-card-open .workspace-card-info-icon {
+            transform: rotate(90deg);
           }
           .workspace-card-title {
             font-size: 13px;
-            font-weight: 700;
-            margin-bottom: 4px;
+            font-weight: 400;
+            margin: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .workspace-card-drawer {
+            padding: 0 0 10px;
+          }
+          .workspace-card-drawer[hidden] {
+            display: none;
+          }
+          .workspace-card-drawer-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+          }
+          .workspace-card-drawer-copy {
+            flex: 1;
+            min-width: 0;
           }
           .workspace-card-path,
           .workspace-card-meta {
             font-size: 11px;
             color: var(--muted);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            white-space: normal;
+            overflow-wrap: anywhere;
+          }
+          .workspace-card-meta + .workspace-card-meta {
+            margin-top: 4px;
+          }
+          .workspace-card-drawer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            flex-shrink: 0;
+          }
+          .workspace-card-drawer-actions button {
+            min-height: 0;
+            padding: 0;
+            font-size: 11px;
+            font-weight: 500;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: var(--muted);
+            line-height: 1.4;
+          }
+          .workspace-card-drawer-actions button:hover {
+            color: var(--accent);
+          }
+          .workspace-card-drawer-actions button.workspace-remove {
+            color: var(--warning);
+            box-shadow: none;
+          }
+          .workspace-card-drawer-actions button.workspace-remove:hover {
+            color: #a9781f;
+          }
+          @media (max-width: 700px) {
+            .workspace-card-drawer-head {
+              flex-wrap: wrap;
+            }
+            .workspace-card-drawer-actions {
+              width: 100%;
+              justify-content: flex-start;
+            }
           }
           .message {
             line-height: 1.54;
@@ -787,6 +1011,59 @@ def render_web_app() -> str:
             flex-wrap: wrap;
             gap: 6px;
           }
+          .composer-queue {
+            display: grid;
+            gap: 6px;
+            padding: 10px 0 8px;
+            border-bottom: 1px solid var(--line-soft);
+            margin-bottom: 4px;
+          }
+          .composer-queue[hidden] {
+            display: none;
+          }
+          .composer-queue-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+          }
+          .composer-queue-label {
+            margin: 0;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-soft);
+          }
+          .composer-queue-count {
+            font-size: 11px;
+            color: var(--muted);
+          }
+          .composer-queue-list {
+            display: grid;
+            gap: 4px;
+          }
+          .composer-queue-item {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 8px;
+            align-items: start;
+            min-width: 0;
+          }
+          .composer-queue-index {
+            min-width: 22px;
+            padding-top: 1px;
+            font-size: 11px;
+            color: var(--muted-soft);
+          }
+          .composer-queue-preview {
+            min-width: 0;
+            font-size: 12px;
+            color: var(--ink);
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
           .attachment-pill {
             display: inline-flex;
             align-items: center;
@@ -836,7 +1113,7 @@ def render_web_app() -> str:
             color: #7f868f;
           }
           .composer-box {
-            position: static;
+            position: relative;
             background: #fcfdff;
           }
           .composer-server-dot {
@@ -970,6 +1247,11 @@ def render_web_app() -> str:
             border-color: #274839;
             color: #f5f7f1;
           }
+          .primary:hover {
+            background: #48705a;
+            border-color: #365845;
+            color: #f5f7f1;
+          }
           .danger { color: var(--danger); }
           button:disabled {
             opacity: 0.45;
@@ -986,7 +1268,13 @@ def render_web_app() -> str:
             flex-direction: column;
             min-height: 0;
             height: 100%;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
+          }
+          .review-scroll.studio-scroll > .studio-shell {
+            flex: 0 0 auto;
+            min-height: 100%;
+            height: auto;
           }
           .review-card {
             border: 1px solid var(--line);
@@ -1028,42 +1316,10 @@ def render_web_app() -> str:
           .studio-preview-bar {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: flex-start;
             gap: 10px;
             padding: 8px 10px;
             border-bottom: 1px solid var(--line-soft);
-          }
-          .studio-preview-actions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-          }
-          .studio-preview-label {
-            font-size: 11px;
-            color: var(--muted);
-          }
-          .studio-preview-link-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            padding: 8px 10px;
-            border-bottom: 1px solid var(--line-soft);
-            background: #f7faf8;
-          }
-          .studio-preview-link-copy {
-            font-size: 11px;
-            color: var(--muted);
-            flex: 1 1 260px;
-            min-width: 0;
-            overflow-wrap: anywhere;
-          }
-          .studio-preview-link-copy strong {
-            color: var(--ink);
-            font-weight: 600;
           }
           .studio-preview-frame {
             width: 100%;
@@ -1087,6 +1343,272 @@ def render_web_app() -> str:
             padding: 14px;
             color: var(--muted);
             line-height: 1.5;
+          }
+          .image-studio-shell {
+            grid-template-rows: auto auto minmax(0, 1fr);
+          }
+          .image-studio-panel {
+            border: 1px solid var(--line);
+            background: #fbfcfe;
+            padding: 12px;
+          }
+          .image-studio-controls {
+            display: grid;
+            gap: 10px;
+          }
+          .image-studio-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-soft);
+          }
+          .image-studio-prompt {
+            width: 100%;
+            min-height: 96px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            padding: 10px 12px;
+            font: inherit;
+          }
+          .image-studio-button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+          }
+          .image-studio-queue {
+            margin: 0 0 10px;
+          }
+          .image-studio-help {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--muted);
+          }
+          .image-studio-advanced-grid {
+            display: grid;
+            gap: 10px;
+            margin-top: 8px;
+          }
+          .image-studio-inline-field {
+            display: grid;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .image-studio-inline-field input,
+          .image-studio-inline-field select {
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            font: inherit;
+            padding: 8px;
+            font-size: 13px;
+          }
+          .image-studio-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--ink);
+          }
+          .image-studio-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+          }
+          .image-studio-card-shell {
+            display: grid;
+            gap: 6px;
+          }
+          .image-studio-card {
+            border: 1px solid var(--line);
+            background: #fff;
+            padding: 0;
+            text-align: left;
+            display: grid;
+            gap: 0;
+            overflow: hidden;
+            cursor: pointer;
+          }
+          .image-studio-card.is-selected {
+            border-color: var(--accent);
+            box-shadow: inset 0 0 0 1px var(--accent);
+          }
+          .image-studio-card img {
+            display: block;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            object-fit: cover;
+            background: #eef2f6;
+          }
+          .image-studio-card-copy {
+            padding: 10px;
+            display: grid;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .image-studio-card-copy strong {
+            color: var(--ink);
+            font-size: 13px;
+          }
+          .image-studio-card-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--muted);
+          }
+          .image-studio-card-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+          }
+          .image-studio-card-toggle input {
+            margin: 0;
+          }
+          .image-studio-card-delete {
+            border: 0;
+            background: none;
+            color: #8d3a32;
+            font: inherit;
+            font-size: 11px;
+            padding: 0;
+            cursor: pointer;
+          }
+          .image-studio-card-delete:hover {
+            text-decoration: underline;
+          }
+          .image-studio-inline-status {
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-size: 10px;
+          }
+          .image-studio-reference-row {
+            display: grid;
+            gap: 8px;
+            border: 1px solid var(--line);
+            background: #fff;
+            padding: 10px;
+          }
+          .image-studio-pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+          }
+          .image-studio-pill-group {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+          .image-studio-pill {
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--muted);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+          }
+          .image-studio-pill.is-active {
+            border-color: var(--accent);
+            background: #edf5f0;
+            color: var(--accent);
+          }
+          .image-studio-detail {
+            min-height: 0;
+            overflow: auto;
+            display: grid;
+            gap: 12px;
+            align-content: start;
+          }
+          .image-studio-section-head h3 {
+            margin: 0;
+            font-size: 15px;
+          }
+          .image-studio-section-head p {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+          }
+          .image-studio-detail-preview,
+          .image-studio-job-preview {
+            width: 100%;
+            border: 1px solid var(--line);
+            background: #f0f3f7;
+            object-fit: cover;
+          }
+          .image-studio-detail-preview {
+            aspect-ratio: 1 / 1;
+          }
+          .image-studio-job-preview {
+            aspect-ratio: 16 / 10;
+          }
+          .image-studio-meta-list {
+            display: grid;
+            gap: 8px;
+          }
+          .image-studio-meta-list div {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--muted);
+            border-bottom: 1px solid var(--line-soft);
+            padding-bottom: 6px;
+          }
+          .image-studio-meta-list strong {
+            color: var(--ink);
+            font-size: 12px;
+          }
+          .image-studio-detail-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+          }
+          .image-studio-ready-badge {
+            font-size: 11px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--ok);
+          }
+          .image-studio-jobs {
+            display: grid;
+            gap: 10px;
+          }
+          .image-studio-job {
+            border: 1px solid var(--line);
+            background: #fff;
+            padding: 10px;
+            display: grid;
+            gap: 10px;
+          }
+          .image-studio-job-head,
+          .image-studio-job-meta,
+          .image-studio-downloads {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .image-studio-downloads a {
+            color: var(--accent);
+            text-decoration: none;
+          }
+          .image-studio-job-error {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--danger);
           }
           .review-title {
             margin: 0 0 8px;
@@ -1216,6 +1738,156 @@ def render_web_app() -> str:
             text-transform: uppercase;
             color: var(--muted-soft);
           }
+          .conversation-settings-card {
+            display: grid;
+            gap: 12px;
+            border: 1px solid var(--line);
+            background: #fcfdff;
+            padding: 12px;
+          }
+          .conversation-settings-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 12px;
+          }
+          .conversation-settings-label {
+            margin: 0 0 4px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted-soft);
+          }
+          .conversation-settings-title {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--ink);
+          }
+          .conversation-settings-meta {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+          }
+          .conversation-context-card {
+            display: grid;
+            gap: 8px;
+            padding-top: 2px;
+          }
+          .conversation-context-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 12px;
+          }
+          .conversation-context-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: flex-end;
+          }
+          .conversation-context-badge {
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--muted);
+            padding: 4px 8px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+          .conversation-context-badge.is-active {
+            border-color: rgba(62, 106, 81, 0.24);
+            background: rgba(62, 106, 81, 0.08);
+            color: var(--ok);
+          }
+          .conversation-context-meter {
+            height: 6px;
+            background: #e7ebef;
+            overflow: hidden;
+          }
+          .conversation-context-meter span {
+            display: block;
+            height: 100%;
+            background: linear-gradient(90deg, #4a715a 0%, #8bad93 100%);
+          }
+          .settings-action-menu {
+            position: relative;
+            min-width: 180px;
+          }
+          .settings-action-menu summary {
+            list-style: none;
+            cursor: pointer;
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+          }
+          .settings-action-menu summary::-webkit-details-marker {
+            display: none;
+          }
+          .settings-action-menu[open] summary {
+            border-color: var(--line-strong);
+          }
+          .settings-action-list {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 6px);
+            z-index: 3;
+            min-width: 220px;
+            display: grid;
+            gap: 2px;
+            padding: 6px;
+            border: 1px solid var(--line);
+            background: #fcfdff;
+            box-shadow: 0 12px 26px rgba(17, 22, 29, 0.12);
+          }
+          .settings-action-list button {
+            width: 100%;
+            justify-content: flex-start;
+            text-align: left;
+            border: 0;
+            background: transparent;
+            padding: 8px 10px;
+            font: inherit;
+            font-size: 13px;
+            color: var(--ink);
+          }
+          .settings-action-list button:hover {
+            background: #eef2f6;
+          }
+          .settings-action-list button.settings-danger,
+          .archived-chat-actions button.settings-danger {
+            color: var(--warning);
+          }
+          .archived-chat-list {
+            display: grid;
+            gap: 8px;
+          }
+          .archived-chat-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            padding-top: 10px;
+            border-top: 1px solid var(--line-soft);
+          }
+          .archived-chat-item:first-child {
+            padding-top: 0;
+            border-top: 0;
+          }
+          .archived-chat-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+          }
+          .archived-chat-empty {
+            font-size: 12px;
+            color: var(--muted);
+          }
           .connection-card {
             border: 1px solid var(--line);
             background: #fcfdff;
@@ -1315,8 +1987,14 @@ def render_web_app() -> str:
               flex-direction: column;
               align-items: stretch;
             }
+            .pane-head-side {
+              justify-content: flex-start;
+            }
             .pane-head-actions {
               justify-content: flex-start;
+            }
+            .pane-collapse-button {
+              display: none;
             }
             .thread-title {
               font-size: 17px;
@@ -1357,11 +2035,30 @@ def render_web_app() -> str:
               min-height: 92px;
               font-size: 16px;
             }
+            .composer-queue-item {
+              grid-template-columns: 20px minmax(0, 1fr);
+              gap: 6px;
+            }
             .context-grid input,
             .settings-body input,
             .settings-body select,
             .settings-body textarea {
               font-size: 16px;
+            }
+            .conversation-settings-head,
+            .archived-chat-item {
+              grid-template-columns: 1fr;
+            }
+            .settings-action-menu {
+              min-width: 0;
+            }
+            .settings-action-list {
+              left: 0;
+              right: auto;
+              min-width: min(100%, 240px);
+            }
+            .archived-chat-actions {
+              justify-content: flex-start;
             }
             .composer-server-dot {
               top: 14px;
@@ -1412,6 +2109,9 @@ def render_web_app() -> str:
             .composer {
               --composer-action-space: 64px;
             }
+            .composer-queue {
+              padding-top: 8px;
+            }
             .composer-actions {
               right: 8px;
               gap: 4px;
@@ -1452,13 +2152,14 @@ def render_web_app() -> str:
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">Workspace</p>
-                    <button class="menu-item" type="button" onclick="clearConversation()">Clear Chat</button>
                     <button class="menu-item" type="button" onclick="stopRun()">Stop Run</button>
                   </section>
                   <section class="menu-section">
                     <p class="menu-title">View</p>
-                    <button class="menu-item" type="button" onclick="toggleReviewPane()">Review Panel</button>
+                    <button id="menu-toggle-review-pane" class="menu-item" type="button" onclick="toggleReviewPane()">Hide Review Panel</button>
                     <button class="menu-item" type="button" onclick="showStudioProjectDetails()">Project Details</button>
+                    <button id="menu-open-image-studio" class="menu-item" type="button" onclick="openImageStudioWindow()">Image Studio Window</button>
+                    <button id="menu-open-breakout" class="menu-item" type="button" onclick="openBreakoutWindow()">Breakout Window</button>
                     <button class="menu-item" type="button" onclick="hardRefresh()">Reload</button>
                     <button class="menu-item" type="button" onclick="openSettings()">Settings</button>
                   </section>
@@ -1475,14 +2176,15 @@ def render_web_app() -> str:
                   </div>
                   <div class="composer-wrap">
                     <form class="composer" onsubmit="return submitComposer(event)">
+                      <div id="composer-queue" class="composer-queue" hidden></div>
                       <div class="composer-box">
                         <textarea id="composer" placeholder="Describe what should happen next."></textarea>
-                      </div>
-                      <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
-                      <div class="composer-actions">
-                        <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
-                        <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
-                        <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
+                        <div id="server-chip" class="composer-server-dot server-dot-offline" title="Offline" aria-label="Server status: offline"></div>
+                        <div class="composer-actions">
+                          <button id="attach-button" class="icon-button" type="button" onclick="openAttachmentPicker()" aria-label="Attach file" title="Attach file">+</button>
+                          <button id="voice-button" class="icon-button mobile-hide" type="button" onclick="startVoiceCapture()" aria-label="Speech to text" title="Speech to text">Mic</button>
+                          <button id="send-button" class="send-fab" type="submit" aria-label="Send">➤</button>
+                        </div>
                       </div>
                       <input id="composer-attachments" type="file" accept="image/*" multiple hidden onchange="onComposerFilesChanged()" />
                       <div id="composer-attachment-list" class="attachment-list" hidden></div>
@@ -1502,7 +2204,7 @@ def render_web_app() -> str:
               ></div>
               <aside class="pane review-pane">
                 <div class="review">
-                  <div class="pane-head">
+                  <div id="review-pane-head" class="pane-head">
                     <div class="pane-head-top">
                       <div class="pane-head-main">
                         <button class="mobile-back" type="button" onclick="closeMobilePanes()">Back</button>
@@ -1510,7 +2212,17 @@ def render_web_app() -> str:
                         <h1 id="side-title">Run Output</h1>
                         <p id="side-copy" class="pane-copy">Operational detail lives here, not in the bubbles.</p>
                       </div>
-                      <div id="side-actions" class="pane-head-actions"></div>
+                      <div class="pane-head-side">
+                        <div id="side-actions" class="pane-head-actions"></div>
+                        <button
+                          id="review-pane-collapse"
+                          class="pane-collapse-button"
+                          type="button"
+                          onclick="toggleReviewPane()"
+                          aria-label="Hide review panel"
+                          title="Hide review panel"
+                        ><span class="pane-collapse-icon" aria-hidden="true">></span></button>
+                      </div>
                     </div>
                   </div>
                   <div id="review-scroll" class="review-scroll">
@@ -1537,41 +2249,41 @@ def render_web_app() -> str:
                 <div id="connections-panel" class="composer-hint">Loading connections…</div>
               </section>
               <section class="settings-section">
+                <h4>Conversation</h4>
+                <div id="conversation-settings-panel" class="composer-hint">Choose a workspace to manage its chats.</div>
+                <div id="conversation-settings-status" class="composer-hint"></div>
+              </section>
+              <section class="settings-section">
                 <h4>Runtime</h4>
-                <label>Provider
-                  <select id="settings-provider">
-                    <option value="codex">codex</option>
-                    <option value="ollama">ollama</option>
+                <label>Runtime
+                  <select id="settings-runtime-family" onchange="updateRuntimeSettingsVisibility(); updateContextCapHint()">
+                    <option value="codex">OpenAI</option>
+                    <option value="ollama">Open Source</option>
                   </select>
                 </label>
-                <label>Default model
-                  <select id="settings-model"></select>
+                <label id="settings-openai-model-label">OpenAI model
+                  <select id="settings-openai-model" onchange="updateContextCapHint()"></select>
                 </label>
+                <label>Context history budget (chars)
+                  <input id="settings-context-char-cap" type="number" min="100" step="100" placeholder="Auto" oninput="updateContextCapHint()" />
+                </label>
+                <div id="settings-context-char-cap-hint" class="composer-hint"></div>
+                <div id="settings-status" class="composer-hint"></div>
+                <div class="button-row">
+                  <button class="primary" type="button" onclick="saveSettings()">Save Settings</button>
+                </div>
+              </section>
+              <section class="settings-section">
+                <h4>Open Source</h4>
                 <label>Ollama host
                   <input id="settings-ollama-host" placeholder="http://127.0.0.1:11434" />
                 </label>
-                <label>Planner model (optional)
-                  <select id="settings-planner-model"></select>
+                <label>Default open-source model
+                  <select id="settings-open-source-model"></select>
                 </label>
-                <label>Builder model (optional)
-                  <select id="settings-builder-model"></select>
-                </label>
-                <label>Reviewer model (optional)
-                  <select id="settings-reviewer-model"></select>
-                </label>
-                <label>Vision model (optional)
-                  <select id="settings-vision-model"></select>
-                </label>
-                <label>Max step retries
-                  <input id="settings-max-step-retries" type="number" min="0" step="1" />
-                </label>
-                <label>Phase timeout (seconds)
-                  <input id="settings-phase-timeout" type="number" min="30" step="1" />
-                </label>
-                <div id="settings-status" class="composer-hint"></div>
+                <div id="settings-open-source-status" class="composer-hint"></div>
                 <div class="button-row">
                   <button type="button" onclick="refreshOllamaModels()">Refresh Ollama Models</button>
-                  <button class="primary" type="button" onclick="saveSettings()">Save Settings</button>
                 </div>
               </section>
             </div>
@@ -1591,13 +2303,15 @@ def render_web_app() -> str:
                   <option value="studio_web">Web Studio</option>
                   <option value="studio_data">Data Studio</option>
                   <option value="studio_docs">Docs Studio</option>
+                  <option value="studio_image">Image Studio</option>
+                  <option value="studio_video">Video Studio</option>
                 </select>
               </label>
               <label id="studio-title-label">Project name
                 <input id="studio-artifact-title" placeholder="Moon Mango Jump" />
               </label>
               <label id="studio-template-label">Template
-                <select id="studio-template-kind">
+                <select id="studio-template-kind" onchange="updateStudioTemplateOptions()">
                 </select>
               </label>
               <label id="studio-theme-label">Theme prompt (optional)
@@ -1616,24 +2330,39 @@ def render_web_app() -> str:
             workspaceId: null,
             workspace: null,
             workspaces: [],
+            workspaceDetailsOpenId: null,
             conversationCache: null,
+            settingsConversations: [],
             lastSignature: null,
             serverInfo: null,
             runStatus: { state: 'idle', step: 'Idle' },
             review: null,
+            imageWorkflow: null,
+            selectedImageId: null,
+            imageRefineSettings: { enabled: false, threshold: 0.78, maxRetries: 1 },
+            imageGenerationSettings: { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, compositionSourceImageId: null, remixMode: 'match' },
+            imageReferenceResult: null,
             submitting: false,
+            voiceCapturePending: false,
             eventCursor: '0',
             assistantMode: 'ask',
-            reviewPaneHidden: true,
+            reviewPaneHidden:
+              document.documentElement.classList.contains('chat-breakout') ||
+              window.matchMedia('(max-width: 880px)').matches,
             setupReport: null,
+            breakoutChatOnly: document.documentElement.classList.contains('chat-breakout'),
+            breakoutStudioOnly:
+              document.documentElement.classList.contains('studio-breakout') ||
+              document.documentElement.classList.contains('image-pane-breakout'),
+            breakoutImagePaneOnly: document.documentElement.classList.contains('image-pane-breakout'),
           };
-          const CODEX_MODEL_OPTIONS = [
+          const OPENAI_MODEL_OPTIONS = [
+            { value: 'gpt-5.3-codex', label: 'GPT-5.3 (medium)' },
             { value: 'gpt-5.4', label: 'GPT-5.4 (medium)' },
-            { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex (medium)' },
-            { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
           ];
           const STUDIO_TEMPLATES = {
             studio_game: [
+              { value: 'runner', label: 'Runner' },
               { value: 'platformer', label: 'Platformer' },
               { value: 'top-down', label: 'Top-down Adventure' },
               { value: 'clicker', label: 'Clicker' },
@@ -1655,6 +2384,14 @@ def render_web_app() -> str:
               { value: 'docs-site', label: 'Docs Site' },
               { value: 'guide', label: 'Guide' },
               { value: 'release-notes', label: 'Release Notes' },
+              { value: 'blank', label: 'Blank Start' },
+            ],
+            studio_image: [
+              { value: 'image-gen', label: 'Image Gen' },
+              { value: 'blank', label: 'Blank Start' },
+            ],
+            studio_video: [
+              { value: 'video-gen', label: 'Video Gen' },
               { value: 'blank', label: 'Blank Start' },
             ],
           };
@@ -1734,11 +2471,180 @@ def render_web_app() -> str:
             const params = new URLSearchParams(window.location.search);
             const workspaceId = (params.get('workspace_id') || '').trim();
             const conversationId = (params.get('conversation_id') || '').trim();
+            const intent = (params.get('intent') || '').trim().toLowerCase();
             return {
-              fromUrl: params.has('workspace_id') || params.has('conversation_id'),
+              fromUrl: params.has('workspace_id') || params.has('conversation_id') || params.has('intent'),
               workspaceId: workspaceId || null,
               conversationId: conversationId || null,
+              intent: intent || null,
             };
+          }
+
+          function mostRecentWorkspaceByKind(workspaceKind) {
+            const matches = (state.workspaces || []).filter(
+              (workspace) => String(workspace?.workspace_kind || '') === String(workspaceKind || '')
+            );
+            if (!matches.length) return null;
+            matches.sort((left, right) => {
+              const leftUpdated = String(left?.updated_at || '');
+              const rightUpdated = String(right?.updated_at || '');
+              if (leftUpdated !== rightUpdated) return rightUpdated.localeCompare(leftUpdated);
+              return String(right?.id || '').localeCompare(String(left?.id || ''));
+            });
+            return matches[0];
+          }
+
+          function preferredImageStudioWorkspace() {
+            if (String(state.workspace?.workspace_kind || '') === 'studio_image' && state.workspaceId) {
+              return {
+                ...state.workspace,
+                id: state.workspaceId,
+                active_conversation_id: state.conversationId || state.workspace?.active_conversation_id || null,
+              };
+            }
+            return mostRecentWorkspaceByKind('studio_image');
+          }
+
+          function preferredVideoStudioWorkspace() {
+            if (String(state.workspace?.workspace_kind || '') === 'studio_video' && state.workspaceId) {
+              return {
+                ...state.workspace,
+                id: state.workspaceId,
+                active_conversation_id: state.conversationId || state.workspace?.active_conversation_id || null,
+              };
+            }
+            return mostRecentWorkspaceByKind('studio_video');
+          }
+
+          async function createStudioWorkspaceWithPayload(payload) {
+            const created = await fetchJson('/api/studio/workspaces', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            state.workspace = created.workspace || null;
+            state.workspaceId = created.workspace?.id || null;
+            state.conversationId = created.conversation?.id || created.workspace?.active_conversation_id || null;
+            state.lastSignature = null;
+            await loadWorkspaces();
+            await loadConversationDetail();
+            await loadReview();
+            return created;
+          }
+
+          async function ensureImageStudioWorkspace() {
+            const existing = preferredImageStudioWorkspace();
+            if (existing?.id) {
+              await selectWorkspace(existing.id, existing.active_conversation_id || null);
+              return existing;
+            }
+            return createStudioWorkspaceWithPayload({
+              workspace_kind: 'studio_image',
+              artifact_title: studioDefaultTitle('studio_image', 'image-gen'),
+              template_kind: 'image-gen',
+              theme_prompt: null,
+            });
+          }
+
+          async function ensureVideoStudioWorkspace() {
+            const existing = preferredVideoStudioWorkspace();
+            if (existing?.id) {
+              await selectWorkspace(existing.id, existing.active_conversation_id || null);
+              return existing;
+            }
+            return createStudioWorkspaceWithPayload({
+              workspace_kind: 'studio_video',
+              artifact_title: studioDefaultTitle('studio_video', 'video-gen'),
+              template_kind: 'video-gen',
+              theme_prompt: null,
+            });
+          }
+
+          function breakoutWindowUrl() {
+            if (!state.workspaceId || !state.conversationId) return null;
+            const url = new URL(window.location.href);
+            url.searchParams.set('workspace_id', state.workspaceId);
+            url.searchParams.set('conversation_id', state.conversationId);
+            url.searchParams.set('view', 'chat');
+            url.searchParams.delete('_ar_open');
+            return url.toString();
+          }
+
+          function imageStudioWindowUrl() {
+            const url = new URL(window.location.href);
+            const preferred = preferredImageStudioWorkspace();
+            if (preferred?.id) {
+              url.searchParams.set('workspace_id', preferred.id);
+              if (preferred.active_conversation_id) {
+                url.searchParams.set('conversation_id', preferred.active_conversation_id);
+              } else {
+                url.searchParams.delete('conversation_id');
+              }
+              url.searchParams.delete('intent');
+            } else {
+              url.searchParams.delete('workspace_id');
+              url.searchParams.delete('conversation_id');
+              url.searchParams.set('intent', 'image-studio');
+            }
+            url.searchParams.set('view', 'image-pane');
+            url.searchParams.delete('_ar_open');
+            return url.toString();
+          }
+
+          function openBreakoutDestination(url, { desktopName = '_blank', desktopFeatures = '' } = {}) {
+            if (!url) return null;
+            const popup = isMobileViewport()
+              ? window.open(url, '_blank', 'noopener,noreferrer')
+              : window.open(url, desktopName, desktopFeatures);
+            if (!popup && isMobileViewport()) {
+              window.location.assign(url);
+              return null;
+            }
+            if (popup && typeof popup.focus === 'function') {
+              popup.focus();
+            }
+            return popup;
+          }
+
+          async function openImageStudio() {
+            try {
+              await ensureImageStudioWorkspace();
+            } catch (error) {
+              window.alert(error.message || 'Could not open Image Studio.');
+            }
+            closeActionsMenu();
+          }
+
+          async function openVideoStudio() {
+            try {
+              await ensureVideoStudioWorkspace();
+            } catch (error) {
+              window.alert(error.message || 'Could not open Video Studio.');
+            }
+            closeActionsMenu();
+          }
+
+          function openImageStudioWindow() {
+            const url = imageStudioWindowUrl();
+            openBreakoutDestination(url, {
+              desktopName: 'alcove-image-studio',
+              desktopFeatures: 'popup=yes,width=1360,height=920,resizable=yes,scrollbars=no',
+            });
+            closeActionsMenu();
+          }
+
+          function openBreakoutWindow() {
+            const url = breakoutWindowUrl();
+            if (!url) {
+              window.alert('Open a conversation first.');
+              return;
+            }
+            const windowName = `alcove-chat-${state.workspaceId}-${state.conversationId}`;
+            openBreakoutDestination(url, {
+              desktopName: windowName,
+              desktopFeatures: 'popup=yes,width=620,height=860,resizable=yes,scrollbars=no',
+            });
+            closeActionsMenu();
           }
 
           function applyComposerMode(mode, rememberPreference = false) {
@@ -1866,11 +2772,13 @@ def render_web_app() -> str:
 
           function renderSetupBanner() {
             const banner = document.getElementById('setup-banner');
+            const frame = document.querySelector('.frame');
             if (!banner) return;
             const report = state.setupReport;
             if (!report || report.ok) {
               banner.hidden = true;
               banner.classList.remove('is-visible');
+              if (frame) frame.classList.remove('has-setup-banner');
               banner.innerHTML = '';
               return;
             }
@@ -1884,6 +2792,7 @@ def render_web_app() -> str:
               .join('');
             banner.hidden = false;
             banner.classList.add('is-visible');
+            if (frame) frame.classList.add('has-setup-banner');
             banner.innerHTML = `
               <div class="setup-banner-head">
                 <div>
@@ -1935,10 +2844,23 @@ def render_web_app() -> str:
           function updateControls() {
             const hasConversation = Boolean(state.conversationId && state.workspaceId);
             const busy = state.submitting;
-            const ids = ['attach-button', 'voice-button', 'send-button'];
+            const ids = ['attach-button', 'send-button'];
             for (const id of ids) {
               const el = document.getElementById(id);
               if (el) el.disabled = !hasConversation || busy;
+            }
+            const voiceButton = document.getElementById('voice-button');
+            if (voiceButton) {
+              voiceButton.disabled = !hasConversation || busy || state.voiceCapturePending;
+              const isNative = Boolean(state.serverInfo?.native_transcription_available);
+              const title = state.voiceCapturePending
+                ? 'Listening...'
+                : isNative
+                  ? 'Speech to text (native)'
+                  : 'Speech to text';
+              voiceButton.title = title;
+              voiceButton.setAttribute('aria-label', title);
+              voiceButton.textContent = state.voiceCapturePending ? '...' : 'Mic';
             }
             const textarea = document.getElementById('composer');
             if (textarea) textarea.disabled = !hasConversation || busy;
@@ -1949,6 +2871,23 @@ def render_web_app() -> str:
               const disabled = state.assistantMode !== 'dev';
               loopMode.disabled = disabled;
               loopMode.title = disabled ? 'Loop requires dev capability mode.' : '';
+            }
+            const reviewToggle = document.getElementById('menu-toggle-review-pane');
+            if (reviewToggle) {
+              const hasReviewWorkspace = hasConversation && !isStudioWorkspace(state.workspace);
+              reviewToggle.disabled = !hasConversation || isStudioWorkspace(state.workspace);
+              reviewToggle.textContent = state.reviewPaneHidden && hasReviewWorkspace ? 'Show Review Panel' : 'Hide Review Panel';
+              reviewToggle.title =
+                !hasConversation
+                  ? 'Open a conversation first.'
+                  : isStudioWorkspace(state.workspace)
+                    ? 'Studio stays visible in this workspace.'
+                    : '';
+            }
+            const breakoutButton = document.getElementById('menu-open-breakout');
+            if (breakoutButton) {
+              breakoutButton.disabled = !hasConversation;
+              breakoutButton.title = hasConversation ? '' : 'Open a conversation first.';
             }
           }
 
@@ -1969,29 +2908,81 @@ def render_web_app() -> str:
             if (input && !input.disabled) input.click();
           }
 
-          function startVoiceCapture() {
+          function preferredVoiceLocale() {
+            return String(navigator.language || 'en-US').trim() || 'en-US';
+          }
+
+          function appendVoiceTranscript(textarea, transcript) {
+            const nextValue = String(transcript || '').trim();
+            if (!nextValue) return;
+            const prefix = textarea.value.trim();
+            textarea.value = prefix ? `${prefix} ${nextValue}` : nextValue;
+            textarea.focus();
+          }
+
+          function setVoiceCapturePending(pending) {
+            state.voiceCapturePending = Boolean(pending);
+            updateControls();
+          }
+
+          async function startVoiceCapture() {
             const textarea = document.getElementById('composer');
-            if (!textarea || textarea.disabled) return;
+            if (!textarea || textarea.disabled || state.voiceCapturePending) return;
+            if (state.serverInfo?.native_transcription_available) {
+              const handled = await startNativeVoiceCapture(textarea);
+              if (handled) return;
+            }
+            startBrowserVoiceCapture(textarea);
+          }
+
+          async function startNativeVoiceCapture(textarea) {
+            setVoiceCapturePending(true);
+            try {
+              const payload = await fetchJson('/api/native/transcribe', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ locale: preferredVoiceLocale() }),
+              });
+              appendVoiceTranscript(textarea, payload.transcript || '');
+              return true;
+            } catch (error) {
+              const status = Number(error?.status || 0);
+              if (status === 404 || status === 409) {
+                return false;
+              }
+              window.alert(error.message || 'Could not capture speech. Please try again.');
+              return true;
+            } finally {
+              setVoiceCapturePending(false);
+            }
+          }
+
+          function startBrowserVoiceCapture(textarea) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
               window.alert('Speech recognition is not available in this browser.');
               return;
             }
+            setVoiceCapturePending(true);
             const recognition = new SpeechRecognition();
-            recognition.lang = 'en-US';
+            recognition.lang = preferredVoiceLocale();
             recognition.interimResults = false;
             recognition.maxAlternatives = 1;
             recognition.onresult = (event) => {
-              const transcript = String(event.results?.[0]?.[0]?.transcript || '').trim();
-              if (!transcript) return;
-              const prefix = textarea.value.trim();
-              textarea.value = prefix ? `${prefix} ${transcript}` : transcript;
-              textarea.focus();
+              appendVoiceTranscript(textarea, String(event.results?.[0]?.[0]?.transcript || ''));
             };
             recognition.onerror = () => {
               window.alert('Could not capture speech. Please try again.');
             };
-            recognition.start();
+            recognition.onend = () => {
+              setVoiceCapturePending(false);
+            };
+            try {
+              recognition.start();
+            } catch (_) {
+              setVoiceCapturePending(false);
+              window.alert('Could not start speech recognition. Please try again.');
+            }
           }
 
           function removeComposerAttachment(index) {
@@ -2067,6 +3058,11 @@ def render_web_app() -> str:
             return `${seconds}s`;
           }
 
+          function formatCount(value) {
+            const number = Math.max(0, Math.round(Number(value) || 0));
+            return number.toLocaleString();
+          }
+
           function currentRunElapsedLabel(status) {
             const stateText = String(status?.state || 'idle');
             const startedAt = parseTimestamp(status?.started_at || status?.updated_at || status?.heartbeat_at);
@@ -2112,18 +3108,24 @@ def render_web_app() -> str:
                 const payload = await response.json();
                 detail = payload.detail || detail;
               } catch (_) {}
-              throw new Error(detail);
+              const error = new Error(detail);
+              error.status = response.status;
+              throw error;
             }
             return response.json();
           }
 
           function renderWorkspaces(workspaces) {
             state.workspaces = workspaces;
+            if (state.workspaceDetailsOpenId && !workspaces.some((workspace) => workspace.id === state.workspaceDetailsOpenId)) {
+              state.workspaceDetailsOpenId = null;
+            }
             if (state.workspaceId) {
               state.workspace = workspaces.find((workspace) => workspace.id === state.workspaceId) || state.workspace;
             }
             if (!state.workspaceId || !state.conversationId) {
               renderWorkspaceSelector(workspaces);
+              renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
             }
           }
 
@@ -2133,6 +3135,8 @@ def render_web_app() -> str:
 
           function studioKindLabel(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'Image Studio';
+            if (value === 'studio_video') return 'Video Studio';
             if (value === 'studio_web') return 'Web Studio';
             if (value === 'studio_data') return 'Data Studio';
             if (value === 'studio_docs') return 'Docs Studio';
@@ -2141,6 +3145,8 @@ def render_web_app() -> str:
 
           function studioArtifactNoun(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'image library';
+            if (value === 'studio_video') return 'video lab';
             if (value === 'studio_web') return 'site';
             if (value === 'studio_data') return 'data workspace';
             if (value === 'studio_docs') return 'docs workspace';
@@ -2148,11 +3154,81 @@ def render_web_app() -> str:
           }
 
           function studioPrimaryAction(workspaceKind) {
+            if (String(workspaceKind || '') === 'studio_image') return 'Open';
             return String(workspaceKind || '') === 'studio_game' ? 'Play' : 'Preview';
+          }
+
+          function workspaceTitle(workspace) {
+            return String(workspace?.display_name || workspace?.id || 'Workspace').trim() || 'Workspace';
+          }
+
+          function workspaceSummaryLine(workspace) {
+            if (isStudioWorkspace(workspace)) {
+              if (String(workspace.workspace_kind || '') === 'studio_image') {
+                return `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'image-gen'}`;
+              }
+              if (String(workspace.workspace_kind || '') === 'studio_video') {
+                return `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'video-gen'}`;
+              }
+              return `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}`;
+            }
+            return workspace.repo_path || 'No repo path set yet';
+          }
+
+          function workspaceMetaLines(workspace) {
+            const lines = [];
+            const updated = formatStamp(workspace?.updated_at);
+            if (updated) {
+              lines.push(`Updated ${updated}`);
+            }
+            if (workspace?.display_name && workspace?.id && workspace.display_name !== workspace.id) {
+              lines.push(`Workspace ID: ${workspace.id}`);
+            }
+            return lines;
+          }
+
+          function workspaceCardMarkup(workspace) {
+            const workspaceId = String(workspace?.id || '').trim();
+            const detailsOpen = state.workspaceDetailsOpenId === workspaceId;
+            return `
+              <article class="workspace-card${detailsOpen ? ' workspace-card-open' : ''}">
+                <div class="workspace-card-row">
+                  <button class="workspace-card-main" type="button" onclick="selectWorkspace('${workspaceId}')">
+                    <div class="workspace-card-title">${escapeHtml(workspaceTitle(workspace))}</div>
+                  </button>
+                  <button
+                    class="workspace-card-info"
+                    type="button"
+                    onclick="toggleWorkspaceDetails('${workspaceId}', event)"
+                    aria-label="${detailsOpen ? 'Collapse workspace details' : 'Expand workspace details'}"
+                    title="${detailsOpen ? 'Collapse workspace details' : 'Expand workspace details'}"
+                    aria-expanded="${detailsOpen ? 'true' : 'false'}"
+                  ><span class="workspace-card-info-icon" aria-hidden="true">></span></button>
+                </div>
+                <div class="workspace-card-drawer"${detailsOpen ? '' : ' hidden'}>
+                  <div class="workspace-card-drawer-head">
+                    <div class="workspace-card-drawer-copy">
+                      <div class="workspace-card-path">${escapeHtml(workspaceSummaryLine(workspace))}</div>
+                      ${workspaceMetaLines(workspace).map((line) => `<div class="workspace-card-meta">${escapeHtml(line)}</div>`).join('')}
+                    </div>
+                    <div class="workspace-card-drawer-actions">
+                      <button type="button" onclick="renameWorkspace('${workspaceId}', event)">Rename</button>
+                      <button class="workspace-remove" type="button" onclick="removeWorkspace('${workspaceId}', event)">Remove</button>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            `;
+          }
+
+          function renderWorkspaceCards(workspaces) {
+            return workspaces.map((workspace) => workspaceCardMarkup(workspace)).join('');
           }
 
           function studioPlaceholder(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'Use the image controls on the right, or ask for prompt help like "make it more toy-like" or "push the silhouette".';
+            if (value === 'studio_video') return 'Ask for a video workflow step, like "set up image-to-video" or "help me tune this motion prompt".';
             if (value === 'studio_web') return 'Ask for a website change, like "make the hero bolder" or "add a pricing section".';
             if (value === 'studio_data') return 'Ask for a data change, like "group revenue by month" or "show duplicate rows".';
             if (value === 'studio_docs') return 'Ask for a docs change, like "rewrite the intro" or "add a getting started section".';
@@ -2161,6 +3237,8 @@ def render_web_app() -> str:
 
           function studioSummaryPrompt(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'Generate, upload, and organize image candidates from inside Alcove.';
+            if (value === 'studio_video') return 'Plan and launch text-to-video or image-to-video work from inside Alcove.';
             if (value === 'studio_web') return 'Describe a change and Alcove will update the site.';
             if (value === 'studio_data') return 'Describe a change and Alcove will update the data workspace.';
             if (value === 'studio_docs') return 'Describe a change and Alcove will update the docs.';
@@ -2169,14 +3247,89 @@ def render_web_app() -> str:
 
           function studioEmptyState(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'Generate or upload an image to start building a native Alcove image library.';
+            if (value === 'studio_video') return 'Your video launchpad preview will appear here after the studio is created.';
             if (value === 'studio_web') return 'Preview will appear here after the website is created.';
             if (value === 'studio_data') return 'Your live data view will appear here after the studio is created.';
             if (value === 'studio_docs') return 'Your rendered docs view will appear here after the studio is created.';
             return 'Preview will appear here after the game is created.';
           }
 
-          function studioDefaultTitle(workspaceKind) {
+          function studioTemplateDefaults(workspaceKind, templateKind) {
+            const workspace = String(workspaceKind || '');
+            const template = String(templateKind || '');
+            if (workspace === 'studio_game') {
+              if (template === 'runner') {
+                return {
+                  title: 'Night Shift Detective',
+                  theme: 'A moonlit city runner where a detective leaps over street hazards and gathers clues.',
+                };
+              }
+              if (template === 'top-down') {
+                return {
+                  title: 'Lantern Lane Mystery',
+                  theme: 'A cozy neighborhood mystery with winding paths, hidden clues, and calm exploration.',
+                };
+              }
+              if (template === 'clicker') {
+                return {
+                  title: 'Clue Collector',
+                  theme: 'A detective desk full of evidence, red string, and satisfying clue-by-clue progress.',
+                };
+              }
+              if (template === 'blank') {
+                return {
+                  title: 'New Game',
+                  theme: 'Bright, playful, and easy to understand.',
+                };
+              }
+              return {
+                title: 'Moon Mango Jump',
+                theme: 'A playful jungle at sunset with friendly robots.',
+              };
+            }
+            if (workspace === 'studio_web') {
+              return {
+                title: 'New Website',
+                theme: 'A bold launch page for a calm, premium product.',
+              };
+            }
+            if (workspace === 'studio_image') {
+              return {
+                title: 'New Image Collection',
+                theme: 'Stylized concepts, prop studies, and collectible image exploration.',
+              };
+            }
+            if (workspace === 'studio_video') {
+              return {
+                title: 'New Video Lab',
+                theme: 'Short motion studies, text-to-video prompts, and image-to-video experiments.',
+              };
+            }
+            if (workspace === 'studio_data') {
+              return {
+                title: 'New Dataset',
+                theme: 'Revenue data with trust cues, clear trends, and simple charts.',
+              };
+            }
+            if (workspace === 'studio_docs') {
+              return {
+                title: 'New Docs',
+                theme: 'Helpful docs with a friendly getting started flow.',
+              };
+            }
+            return {
+              title: 'New Studio',
+              theme: 'Clear, approachable, and easy to shape.',
+            };
+          }
+
+          function studioDefaultTitle(workspaceKind, templateKind) {
+            const defaults = studioTemplateDefaults(workspaceKind, templateKind);
+            if (defaults?.title) return defaults.title;
             const value = String(workspaceKind || '');
+            if (value === 'studio_image') return 'New Image Collection';
+            if (value === 'studio_video') return 'New Video Lab';
             if (value === 'studio_web') return 'New Website';
             if (value === 'studio_data') return 'New Dataset';
             if (value === 'studio_docs') return 'New Docs';
@@ -2192,7 +3345,9 @@ def render_web_app() -> str:
 
           function childFriendlyPreviewState(workspace) {
             const stateText = String(workspace?.preview_state || '');
+            if (String(workspace?.workspace_kind || '') === 'studio_image') return 'Native Workflow';
             if (stateText === 'ready') {
+              if (String(workspace?.workspace_kind || '') === 'studio_video') return 'Ready to Watch';
               if (String(workspace?.workspace_kind || '') === 'studio_data') return 'Ready to Explore';
               if (String(workspace?.workspace_kind || '') === 'studio_docs') return 'Ready to Read';
               return String(workspace?.workspace_kind || '') === 'studio_game' ? 'Ready to Play' : 'Ready to Preview';
@@ -2258,36 +3413,22 @@ def render_web_app() -> str:
               host.innerHTML = `
                 <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
                   <h2>Alcove</h2>
-                  <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
-                  <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
-                  <div class="home-actions">
-                    <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import</button>
-                  </div>
+	                  <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
+	                  <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, docs, image workflow, or video launchpad.</p>
+	                  <div class="home-actions">
+	                    <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
+	                    <button type="button" onclick="openImageStudio()">Image Studio</button>
+	                    <button type="button" onclick="openVideoStudio()">Video Studio</button>
+	                    <button type="button" onclick="promptImportWorkspace()">Import</button>
+	                  </div>
                   <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
                 </section>
               `;
               return;
             }
             host.innerHTML = `
-              <section id="workspace-dropzone" class="studio-hero dropzone home-dropzone">
-                <h2>Alcove</h2>
-                <p class="hero-copy">Open a local project or start fresh. One workspace chat, live preview, and clear run output.</p>
-                <p class="dropzone-copy">Drop a folder to map a repo, or start a Studio for a game, site, data view, or docs.</p>
-                <div class="home-actions">
-                  <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                  <button type="button" onclick="promptImportWorkspace()">Import</button>
-                </div>
-                <div class="dropzone-hint">Best on desktop. If the browser hides the path, Alcove will ask you to paste it.</div>
-                <section class="workspace-grid">
-                  ${workspaces.map((workspace) => `
-                    <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
-                      <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
-                      <div class="workspace-card-path">${escapeHtml(isStudioWorkspace(workspace) ? `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}` : (workspace.repo_path || 'No repo path set yet'))}</div>
-                      <div class="workspace-card-meta">${escapeHtml(String(workspace.conversation_count || 1))} chat · ${escapeHtml(formatStamp(workspace.updated_at))}</div>
-                    </button>
-                  `).join('')}
-                </section>
+              <section id="workspace-dropzone" class="workspace-grid home-list">
+                ${renderWorkspaceCards(workspaces)}
               </section>
             `;
           }
@@ -2296,12 +3437,18 @@ def render_web_app() -> str:
             state.workspaceId = null;
             state.conversationId = null;
             state.workspace = null;
+            state.workspaceDetailsOpenId = null;
+            state.settingsConversations = [];
             state.lastSignature = null;
-            state.reviewPaneHidden = true;
+            state.reviewPaneHidden = state.breakoutChatOnly || isMobileViewport();
+            clearRememberedWorkspaceSelection();
             closeMobilePanes();
             applyReviewPaneVisibility();
             renderWorkspaceSelector(state.workspaces || []);
             loadReview();
+            if (isSettingsOpen()) {
+              loadConversationSettings().catch(() => {});
+            }
             updateControls();
           }
 
@@ -2323,6 +3470,21 @@ def render_web_app() -> str:
             })();
             const workspaceId = requested.workspaceId || storedWorkspaceId || null;
             const conversationId = requested.conversationId || storedConversationId || null;
+            if ((requested.intent === 'image-studio' || requested.intent === 'video-studio') && !requested.workspaceId) {
+              if (requested.intent === 'video-studio') {
+                await ensureVideoStudioWorkspace();
+              } else {
+                await ensureImageStudioWorkspace();
+              }
+              if (requested.fromUrl && window.history && window.history.replaceState) {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('workspace_id');
+                url.searchParams.delete('conversation_id');
+                url.searchParams.delete('intent');
+                window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+              }
+              return true;
+            }
             if (!workspaceId) {
               renderWorkspaceSelector(state.workspaces || []);
               return false;
@@ -2334,7 +3496,11 @@ def render_web_app() -> str:
             }
             await selectWorkspace(workspaceId, conversationId);
             if (requested.fromUrl && window.history && window.history.replaceState) {
-              window.history.replaceState({}, '', window.location.pathname);
+              const url = new URL(window.location.href);
+              url.searchParams.delete('workspace_id');
+              url.searchParams.delete('conversation_id');
+              url.searchParams.delete('intent');
+              window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
             }
             return true;
           }
@@ -2344,12 +3510,14 @@ def render_web_app() -> str:
             return `
               <section class="home-shell">
                 <section class="home-panel">
-                  <h2>Bring in a project</h2>
-                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
-                  <div class="home-actions">
-                    <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
-                    <button type="button" onclick="promptImportWorkspace()">Import</button>
-                  </div>
+	                  <h2>Bring in a project</h2>
+	                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
+	                  <div class="home-actions">
+	                    <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
+	                    <button type="button" onclick="openImageStudio()">Image Studio</button>
+	                    <button type="button" onclick="openVideoStudio()">Video Studio</button>
+	                    <button type="button" onclick="promptImportWorkspace()">Import</button>
+	                  </div>
                   <div id="workspace-dropzone" class="dropzone">
                     <strong>Drop a folder to map a local project</strong>
                     <p class="dropzone-copy">Drag a project folder from Finder into Alcove and it will create a workspace for that repo.</p>
@@ -2360,17 +3528,70 @@ def render_web_app() -> str:
                   <h3>Recent Workspaces</h3>
                   <p>Pick up where you left off.</p>
                   <section class="workspace-grid compact">
-                    ${recent.length ? recent.map((workspace) => `
-                      <button class="workspace-card" type="button" onclick="selectWorkspace('${workspace.id}')">
-                        <div class="workspace-card-title">${escapeHtml(workspace.display_name || workspace.id)}</div>
-                        <div class="workspace-card-path">${escapeHtml(isStudioWorkspace(workspace) ? `${studioKindLabel(workspace.workspace_kind)} · ${workspace.template_kind || 'blank'}` : (workspace.repo_path || 'No repo path set yet'))}</div>
-                        <div class="workspace-card-meta">${escapeHtml(String(workspace.conversation_count || 1))} chat · ${escapeHtml(formatStamp(workspace.updated_at))}</div>
-                      </button>
-                    `).join('') : '<div class="empty">No recent workspaces yet.</div>'}
+                    ${recent.length ? renderWorkspaceCards(recent) : '<div class="empty">No recent workspaces yet.</div>'}
                   </section>
                 </section>
               </section>
             `;
+          }
+
+          function toggleWorkspaceDetails(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            state.workspaceDetailsOpenId = state.workspaceDetailsOpenId === workspaceId ? null : workspaceId;
+            renderWorkspaceSelector(state.workspaces || []);
+            renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
+          }
+
+          async function renameWorkspace(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            const workspace = (state.workspaces || []).find((item) => item.id === workspaceId);
+            if (!workspace) return;
+            const currentName = workspaceTitle(workspace);
+            const nextName = (window.prompt('Rename workspace', currentName) || '').trim();
+            if (!nextName || nextName === currentName) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ display_name: nextName }),
+              });
+              state.workspaceDetailsOpenId = null;
+              await loadWorkspaces();
+            } catch (error) {
+              window.alert(error.message || 'Could not rename workspace.');
+            }
+          }
+
+          async function removeWorkspace(workspaceId, event) {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            const workspace = (state.workspaces || []).find((item) => item.id === workspaceId);
+            if (!workspace) return;
+            const confirmed = window.confirm(
+              `Remove "${workspaceTitle(workspace)}" from Alcove? This removes the workspace and chat history from Alcove, but leaves any repo files on disk.`
+            );
+            if (!confirmed) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+                method: 'DELETE',
+              });
+              if (state.workspaceId === workspaceId) {
+                goToWorkspaceSelector();
+              }
+              state.workspaceDetailsOpenId = null;
+              await loadWorkspaces();
+              await loadReview();
+            } catch (error) {
+              window.alert(error.message || 'Could not remove workspace.');
+            }
           }
 
           function renderThread(conversation) {
@@ -2383,6 +3604,7 @@ def render_web_app() -> str:
               (host.scrollHeight - host.scrollTop - host.clientHeight) < 48;
             if (!messages.length) {
               host.innerHTML = '<div class="empty">No messages yet. Start with a short prompt to verify the browser workflow.</div>';
+              renderComposerQueue();
               return;
             }
             host.innerHTML = messages.map((message) => {
@@ -2392,20 +3614,13 @@ def render_web_app() -> str:
             if (shouldStickToBottom) {
               host.scrollTop = host.scrollHeight;
             }
+            renderComposerQueue();
           }
 
           function renderStatus(status) {
             state.runStatus = status || { state: 'idle', step: 'Idle' };
-            const stateText = String(state.runStatus.state || 'idle');
-            updateRunChip();
-            const active = isActiveState(stateText);
-            if (!state.serverInfo) {
-              setServerDot('offline', 'Offline');
-            } else if (active) {
-              setServerDot('busy', 'Working');
-            } else {
-              setServerDot('online', 'Ready');
-            }
+            refreshWorkloadIndicators();
+            renderComposerQueue();
             const buildBadge = document.getElementById('build-badge');
             if (buildBadge) {
               buildBadge.textContent = state.serverInfo?.build_label || 'Build unavailable';
@@ -2417,11 +3632,88 @@ def render_web_app() -> str:
             updateControls();
           }
 
+          function imageStudioWorkloadStatus(workflow = imageStudioWorkflow()) {
+            if (String(state.workspace?.workspace_kind || '') !== 'studio_image') return null;
+            const queue = imageGenerationQueue(workflow);
+            const active = queue.active || null;
+            const queuedCount = Array.isArray(queue.items) ? queue.items.length : 0;
+            if (active) {
+              const count = Math.max(1, Number(active.count || 1) || 1);
+              const noun = count === 1 ? 'image' : 'images';
+              const queuedSuffix = queuedCount > 0 ? ` +${queuedCount} queued` : '';
+              return {
+                chipState: 'running',
+                chipLabel: `image running${queuedSuffix}`,
+                chipTitle: `Generating ${count} ${noun}${queuedCount > 0 ? ` with ${queuedCount} more queued` : ''}.`,
+                dotStatus: 'busy',
+                dotTitle: `Image generation running${queuedCount > 0 ? ` with ${queuedCount} queued` : ''}`,
+              };
+            }
+            if (queuedCount > 0) {
+              return {
+                chipState: 'starting',
+                chipLabel: queuedCount === 1 ? 'image queued' : `image queued +${queuedCount}`,
+                chipTitle: queuedCount === 1
+                  ? '1 image generation request is queued.'
+                  : `${queuedCount} image generation requests are queued.`,
+                dotStatus: 'busy',
+                dotTitle: queuedCount === 1 ? '1 image run queued' : `${queuedCount} image runs queued`,
+              };
+            }
+            if (queue.last_error) {
+              return {
+                chipState: 'failed',
+                chipLabel: 'image failed',
+                chipTitle: `Last image run failed: ${queue.last_error}`,
+                dotStatus: 'online',
+                dotTitle: 'Last image run failed',
+              };
+            }
+            return null;
+          }
+
+          function refreshWorkloadIndicators() {
+            const status = state.runStatus || { state: 'idle', step: 'Idle' };
+            const stateText = String(status.state || 'idle');
+            const queueCount = Number(status.queue_count || 0);
+            const imageStatus = imageStudioWorkloadStatus();
+            updateRunChip();
+            if (!state.serverInfo) {
+              setServerDot('offline', 'Offline');
+              return;
+            }
+            if (isActiveState(stateText)) {
+              setServerDot('busy', 'Working');
+              return;
+            }
+            if (queueCount > 0) {
+              setServerDot('busy', queueCount === 1 ? '1 queued message' : `${queueCount} queued messages`);
+              return;
+            }
+            if (imageStatus?.dotStatus === 'busy') {
+              setServerDot('busy', imageStatus.dotTitle || 'Image generation running');
+              return;
+            }
+            if (imageStatus?.dotTitle) {
+              setServerDot('online', imageStatus.dotTitle);
+              return;
+            }
+            setServerDot('online', 'Ready');
+          }
+
           function updateRunChip() {
             const status = state.runStatus || { state: 'idle', step: 'Idle' };
             const stateText = String(status.state || 'idle');
             const elapsed = currentRunElapsedLabel(status);
             const queueCount = Number(status.queue_count || 0);
+            const imageStatus = imageStudioWorkloadStatus();
+            const shouldPreferRunStatus = isActiveState(stateText) || queueCount > 0 || !imageStatus;
+            if (!shouldPreferRunStatus && imageStatus) {
+              setChip('global-run-chip', imageStatus.chipLabel, imageStatus.chipState);
+              const chip = document.getElementById('global-run-chip');
+              if (chip) chip.title = imageStatus.chipTitle || imageStatus.chipLabel;
+              return;
+            }
             let label = elapsed ? `${stateText} (${elapsed})` : stateText;
             if (queueCount > 0) {
               label = `${label} +${queueCount} queued`;
@@ -2444,50 +3736,113 @@ def render_web_app() -> str:
           }
 
           function toggleReviewPane() {
+            if (isStudioWorkspace(state.workspace)) {
+              state.reviewPaneHidden = false;
+              applyReviewPaneVisibility();
+              updateControls();
+              closeActionsMenu();
+              return;
+            }
             state.reviewPaneHidden = !state.reviewPaneHidden;
             applyReviewPaneVisibility();
+            updateControls();
             closeActionsMenu();
           }
 
           function applyReviewPaneVisibility() {
+            const shell = document.getElementById('shell');
+            const threadPane = document.querySelector('.thread-pane');
             const pane = document.querySelector('.review-pane');
-            if (!pane) return;
-            pane.style.display = state.reviewPaneHidden ? 'none' : '';
+            const divider = document.getElementById('pane-divider');
+            if (state.breakoutChatOnly) {
+              if (shell) shell.classList.add('single-pane');
+              if (threadPane) threadPane.style.display = 'flex';
+              if (pane) pane.style.display = 'none';
+              if (divider) divider.style.display = 'none';
+              return;
+            }
+            if (state.breakoutStudioOnly) {
+              if (shell) shell.classList.add('single-pane');
+              if (threadPane) threadPane.style.display = 'none';
+              if (pane) pane.style.display = 'flex';
+              if (divider) divider.style.display = 'none';
+              return;
+            }
+            const singlePane = state.reviewPaneHidden && !isStudioWorkspace(state.workspace);
+            if (shell) shell.classList.toggle('single-pane', singlePane);
+            if (threadPane) threadPane.style.display = '';
+            if (pane) pane.style.display = singlePane ? 'none' : '';
+            if (divider) divider.style.display = singlePane ? 'none' : '';
           }
 
           function renderReviewPane(payload) {
             state.review = payload;
             const host = document.getElementById('review-scroll');
+            const paneHead = document.getElementById('review-pane-head');
             const eyebrow = document.getElementById('side-eyebrow');
             const title = document.getElementById('side-title');
             const copy = document.getElementById('side-copy');
             const actions = document.getElementById('side-actions');
+            const collapseButton = document.getElementById('review-pane-collapse');
             if (!state.workspaceId || !state.conversationId || !state.workspace) {
+              state.imageWorkflow = null;
+              state.selectedImageId = null;
+              state.imageReferenceResult = null;
+              if (paneHead) paneHead.style.display = 'none';
+              if (collapseButton) collapseButton.style.display = 'none';
               host.classList.remove('studio-scroll');
               if (actions) actions.innerHTML = '';
               if (eyebrow) eyebrow.textContent = 'Home';
               if (title) title.textContent = 'Bring in a project';
               if (copy) copy.textContent = 'Open a repo or start a Studio. Preview, publish, and run details show up here.';
               host.innerHTML = renderHomePane();
+              renderComposerQueue();
               return;
             }
+            if (paneHead) paneHead.style.display = '';
             if (isStudioWorkspace(state.workspace)) {
+              state.imageWorkflow = payload.image_workflow || (String(state.workspace?.workspace_kind || '') === 'studio_image' ? state.imageWorkflow : null);
               host.classList.add('studio-scroll');
+              if (collapseButton) collapseButton.style.display = 'none';
               if (eyebrow) eyebrow.textContent = 'Studio';
               if (title) title.textContent = state.workspace.artifact_title || state.workspace.game_title || state.workspace.display_name || 'Alcove Studio';
-              if (copy) copy.textContent = 'Preview, publish, and project details live here beside the workspace chat.';
+              if (copy) {
+                  copy.textContent =
+                    String(state.workspace?.workspace_kind || '') === 'studio_image'
+                      ? 'Generate, upload, describe, and review image candidates without leaving Alcove.'
+                      : String(state.workspace?.workspace_kind || '') === 'studio_video'
+                        ? 'Use this workspace as the Alcove home for text-to-video and image-to-video experiments.'
+                        : 'Preview, publish, and project details live here beside the workspace chat.';
+              }
               if (actions) {
                 const workspaceKind = state.workspace?.workspace_kind || 'studio_game';
-                actions.innerHTML = `
-                  <button class="primary" type="button" onclick="refreshStudioPreview()">${escapeHtml(studioPrimaryAction(workspaceKind))}</button>
-                  <button type="button" onclick="publishStudioWorkspace()">Publish</button>
-                  <button type="button" onclick="remixStudioWorkspace()">Remix</button>
-                `;
+                if (workspaceKind === 'studio_image') {
+                  syncImageStudioSelection(state.imageWorkflow);
+                  syncImageGenerationSettings(state.imageWorkflow);
+                  actions.innerHTML = `
+                    <button class="primary" type="button" onclick="focusImageStudioPrompt()">Generate</button>
+                    <button type="button" onclick="triggerImageStudioUpload()">Upload</button>
+                    ${state.breakoutImagePaneOnly ? '' : '<button type="button" onclick="openImageStudioWindow()">Open Image Pane</button>'}
+                    <button type="button" onclick="openImageStudioFolder()">Open Image Folder</button>
+                    <button type="button" onclick="remixStudioWorkspace()">Remix</button>
+                  `;
+                } else {
+                  actions.innerHTML = `
+                    <button class="primary" type="button" onclick="refreshStudioPreview()">${escapeHtml(studioPrimaryAction(workspaceKind))}</button>
+                    <button type="button" onclick="publishStudioWorkspace()">Publish</button>
+                    <button type="button" onclick="remixStudioWorkspace()">Remix</button>
+                  `;
+                }
               }
               host.innerHTML = renderStudioPane();
+              renderComposerQueue();
               return;
             }
+            state.imageWorkflow = null;
+            state.selectedImageId = null;
+            state.imageReferenceResult = null;
             host.classList.remove('studio-scroll');
+            if (collapseButton) collapseButton.style.display = '';
             if (actions) actions.innerHTML = '';
             if (eyebrow) eyebrow.textContent = 'Review';
             if (title) title.textContent = 'Run Output';
@@ -2496,7 +3851,6 @@ def render_web_app() -> str:
             const checks = payload.checks || {};
             const changedFiles = payload.changed_files || [];
             const queue = payload.queue || {};
-            const queuedItems = queue.items || [];
             const summary = payload.summary || 'No summary yet.';
             const latest = (payload.latest_result && payload.latest_result.content) || '';
             host.innerHTML = `
@@ -2507,14 +3861,6 @@ def render_web_app() -> str:
                 <p class="review-line subtle">Mode: ${escapeHtml(run.mode || 'message')}</p>
                 <p class="review-line subtle">Queued: ${escapeHtml(String(run.queue_count ?? queue.global_count ?? 0))}</p>
                 <p class="review-line subtle">Updated: ${escapeHtml(formatStamp(run.updated_at))}</p>
-              </section>
-              <section class="review-card">
-                <p class="review-title">Queued Messages</p>
-                ${
-                  queuedItems.length
-                    ? `<ul class="review-list">${queuedItems.map((item) => `<li>#${escapeHtml(String(item.position || '?'))}: ${escapeHtml(item.content_preview || '')}</li>`).join('')}</ul>`
-                    : '<p class="review-line subtle">No queued messages for this chat.</p>'
-                }
               </section>
               <section class="review-card">
                 <p class="review-title">Summary</p>
@@ -2545,16 +3891,634 @@ def render_web_app() -> str:
                 <p class="review-line subtle">${escapeHtml(latest || 'No operational output yet.')}</p>
               </section>
             `;
+            renderComposerQueue();
+          }
+
+          function imageStudioWorkflow() {
+            return state.imageWorkflow || state.review?.image_workflow || null;
+          }
+
+          function imageGenerationQueue(workflow = imageStudioWorkflow()) {
+            const queue = workflow?.generation_queue;
+            return queue && typeof queue === 'object'
+              ? {
+                  active: queue.active || null,
+                  items: Array.isArray(queue.items) ? queue.items : [],
+                  count: Number(queue.count || 0),
+                  running: Boolean(queue.running),
+                  last_error: queue.last_error || '',
+                }
+              : { active: null, items: [], count: 0, running: false, last_error: '' };
+          }
+
+          function imageGenerateButtonLabel(workflow = imageStudioWorkflow()) {
+            const queue = imageGenerationQueue(workflow);
+            return queue.active || queue.items.length ? 'Queue Image Run' : 'Generate Images';
+          }
+
+          function imageGenerationProfiles(workflow = imageStudioWorkflow()) {
+            return Array.isArray(workflow?.generation_profiles) ? workflow.generation_profiles : [];
+          }
+
+          function imageGenerationPassOptions(workflow = imageStudioWorkflow()) {
+            return Array.isArray(workflow?.generation_pass_options) ? workflow.generation_pass_options : [2, 4, 8, 12];
+          }
+
+          function imageGenerationCountOptions(workflow = imageStudioWorkflow()) {
+            return Array.isArray(workflow?.generation_count_options) ? workflow.generation_count_options : [1, 2, 3, 4];
+          }
+
+          function syncImageGenerationSettings(workflow = imageStudioWorkflow()) {
+            const profiles = imageGenerationProfiles(workflow);
+            const fallback = String(workflow?.default_generation_profile_id || 'portrait-768x1024');
+            const countOptions = imageGenerationCountOptions(workflow).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+            const passOptions = imageGenerationPassOptions(workflow).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+            const fallbackCount = Number(workflow?.default_generation_count || 1) || 1;
+            const fallbackPasses = Number(workflow?.default_generation_passes || 8) || 8;
+            const available = new Set(profiles.map((item) => String(item?.id || '').trim()).filter(Boolean));
+            const images = Array.isArray(workflow?.images) ? workflow.images : [];
+            const validImageIds = new Set(images.map((item) => String(item?.id || '').trim()).filter(Boolean));
+            const current = String(state.imageGenerationSettings?.sizeProfileId || '').trim();
+            const currentCount = Number(state.imageGenerationSettings?.count || 0);
+            const currentPasses = Number(state.imageGenerationSettings?.passes || 0);
+            const next = { ...(state.imageGenerationSettings || { count: fallbackCount, sizeProfileId: fallback, passes: fallbackPasses, compositionSourceImageId: null, remixMode: 'match' }) };
+            next.count = countOptions.includes(currentCount)
+              ? currentCount
+              : (countOptions.includes(fallbackCount) ? fallbackCount : (countOptions[0] || 1));
+            next.sizeProfileId = current && (!available.size || available.has(current))
+              ? current
+              : (available.has(fallback) ? fallback : (profiles[0]?.id || fallback));
+            next.passes = passOptions.includes(currentPasses)
+              ? currentPasses
+              : (passOptions.includes(fallbackPasses) ? fallbackPasses : (passOptions[0] || 8));
+            if (!validImageIds.has(String(next.compositionSourceImageId || '').trim())) {
+              next.compositionSourceImageId = null;
+            }
+            next.remixMode = String(next.remixMode || 'match') === 'remix' ? 'remix' : 'match';
+            state.imageGenerationSettings = next;
+          }
+
+          function updateImageGenerationSetting(field, value) {
+            const next = { ...(state.imageGenerationSettings || { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, compositionSourceImageId: null, remixMode: 'match' }) };
+            if (field === 'count') next.count = Number(value) || 1;
+            if (field === 'sizeProfileId') next.sizeProfileId = String(value || '').trim() || 'portrait-768x1024';
+            if (field === 'passes') next.passes = Number(value) || 8;
+            if (field === 'remixMode') next.remixMode = String(value || '').trim() === 'remix' ? 'remix' : 'match';
+            if (field === 'compositionSourceImageId') next.compositionSourceImageId = String(value || '').trim() || null;
+            state.imageGenerationSettings = next;
+          }
+
+          function compositionSourceImage(workflow = imageStudioWorkflow()) {
+            syncImageGenerationSettings(workflow);
+            const images = Array.isArray(workflow?.images) ? workflow.images : [];
+            const sourceId = String(state.imageGenerationSettings?.compositionSourceImageId || '').trim();
+            return images.find((item) => String(item.id || '') === sourceId) || null;
+          }
+
+          function toggleImageCompositionSource(imageId, enabled) {
+            const nextId = enabled ? String(imageId || '').trim() : null;
+            updateImageGenerationSetting('compositionSourceImageId', nextId);
+            if (nextId) {
+              state.selectedImageId = nextId;
+            }
+            renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
+          }
+
+          function clearImageCompositionSource() {
+            updateImageGenerationSetting('compositionSourceImageId', null);
+            renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
+          }
+
+          function imageGenerationPayload(workflow = imageStudioWorkflow()) {
+            syncImageGenerationSettings(workflow);
+            const settings = state.imageGenerationSettings || { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, compositionSourceImageId: null, remixMode: 'match' };
+            const payload = {
+              count: Number(settings.count || workflow?.default_generation_count || 1) || 1,
+              size_profile_id: String(settings.sizeProfileId || workflow?.default_generation_profile_id || 'portrait-768x1024'),
+              passes: Number(settings.passes || workflow?.default_generation_passes || 8) || 8,
+            };
+            const compositionSourceImageId = String(settings.compositionSourceImageId || '').trim();
+            if (compositionSourceImageId) {
+              payload.composition_source_image_id = compositionSourceImageId;
+              payload.remix_mode = String(settings.remixMode || 'match') === 'remix' ? 'remix' : 'match';
+            }
+            return payload;
+          }
+
+          function renderImageGenerationQueue(workflow) {
+            const queue = imageGenerationQueue(workflow);
+            const active = queue.active;
+            const queuedItems = queue.items || [];
+            if (!active && !queuedItems.length && !queue.last_error) return '';
+            const visibleItems = queuedItems.slice(0, 3);
+            const overflow = Math.max(0, queuedItems.length - visibleItems.length);
+            return `
+              <div class="composer-queue image-studio-queue">
+                <div class="composer-queue-head">
+                  <p class="composer-queue-label">Queued Image Runs</p>
+                  <span class="composer-queue-count">${escapeHtml(String(queuedItems.length))} waiting</span>
+                </div>
+                <div class="composer-queue-list">
+                  ${
+                    active
+                      ? `
+                        <div class="composer-queue-item">
+                          <span class="composer-queue-index">Now</span>
+                          <span class="composer-queue-preview">${escapeHtml(active.prompt_preview || 'Running image run')} · ${escapeHtml(String(active.count || 1))} image${Number(active.count || 1) === 1 ? '' : 's'}</span>
+                        </div>
+                      `
+                      : ''
+                  }
+                  ${visibleItems.map((item) => `
+                    <div class="composer-queue-item">
+                      <span class="composer-queue-index">#${escapeHtml(String(item.position || '?'))}</span>
+                      <span class="composer-queue-preview">${escapeHtml(item.prompt_preview || 'Queued image run')} · ${escapeHtml(String(item.count || 1))} image${Number(item.count || 1) === 1 ? '' : 's'}</span>
+                    </div>
+                  `).join('')}
+                  ${
+                    overflow > 0
+                      ? `<div class="composer-queue-item"><span class="composer-queue-index">+</span><span class="composer-queue-preview">${escapeHtml(String(overflow))} more queued</span></div>`
+                      : ''
+                  }
+                </div>
+                ${
+                  queue.last_error
+                    ? `<p class="image-studio-job-error">Last image run failed: ${escapeHtml(queue.last_error)}</p>`
+                    : ''
+                }
+              </div>
+            `;
+          }
+
+          function syncImageStudioSelection(workflow) {
+            const images = Array.isArray(workflow?.images) ? workflow.images : [];
+            if (!images.length) {
+              state.selectedImageId = null;
+              return;
+            }
+            const current = String(state.selectedImageId || '').trim();
+            if (current && images.some((item) => String(item.id || '') === current)) {
+              return;
+            }
+            state.selectedImageId = String(workflow?.selected_image_id || images[0].id || '');
+          }
+
+          function selectedImageStudioAsset() {
+            const workflow = imageStudioWorkflow();
+            const images = Array.isArray(workflow?.images) ? workflow.images : [];
+            const selected = String(state.selectedImageId || workflow?.selected_image_id || '').trim();
+            return images.find((item) => String(item.id || '') === selected) || images[0] || null;
+          }
+
+          function selectImageStudioAsset(imageId) {
+            state.selectedImageId = imageId;
+            if (state.imageWorkflow) {
+              state.imageWorkflow.selected_image_id = imageId;
+            }
+            renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });
+          }
+
+          function focusImageStudioPrompt() {
+            const textarea = document.getElementById('image-studio-prompt');
+            if (!textarea) return;
+            textarea.focus();
+          }
+
+          function updateImageRefineSetting(field, value) {
+            const next = { ...(state.imageRefineSettings || { enabled: false, threshold: 0.78, maxRetries: 1 }) };
+            if (field === 'enabled') next.enabled = Boolean(value);
+            if (field === 'threshold') next.threshold = Number(value) || 0.78;
+            if (field === 'maxRetries') next.maxRetries = Math.max(0, Math.min(3, Number(value) || 0));
+            state.imageRefineSettings = next;
+          }
+
+          function imageRefinePayload() {
+            const settings = state.imageRefineSettings || { enabled: false, threshold: 0.78, maxRetries: 1 };
+            return {
+              enabled: Boolean(settings.enabled),
+              threshold: Number(settings.threshold) || 0.78,
+              max_retries: Math.max(0, Math.min(3, Number(settings.maxRetries) || 0)),
+            };
+          }
+
+          function triggerImageStudioUpload() {
+            const input = document.getElementById('image-studio-upload');
+            if (input) input.click();
+          }
+
+          async function openImageStudioFolder() {
+            if (!state.workspaceId) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/open-folder`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({}),
+              });
+            } catch (error) {
+              window.alert(error.message || 'Could not open the image folder.');
+            }
+          }
+
+          async function uploadImageStudioAsset(event) {
+            const input = event?.target;
+            const file = input?.files?.[0];
+            if (!file || !state.workspaceId) return;
+            try {
+              await uploadImageStudioDroppedFiles([file], { useAsReference: false });
+            } catch (error) {
+              window.alert(error.message || 'Could not upload that image.');
+            } finally {
+              if (input) input.value = '';
+            }
+          }
+
+          function droppedImageFiles(dataTransfer) {
+            const files = Array.from(dataTransfer?.files || []);
+            return files.filter((file) => {
+              const mime = String(file?.type || '').trim().toLowerCase();
+              if (mime.startsWith('image/')) return true;
+              const name = String(file?.name || '').trim().toLowerCase();
+              return ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'].some((suffix) => name.endsWith(suffix));
+            });
+          }
+
+          function droppedImagePath(dataTransfer) {
+            const uriList = dataTransfer?.getData('text/uri-list') || dataTransfer?.getData('text/plain') || '';
+            const candidate = uriList
+              .split(String.fromCharCode(10))
+              .map((line) => line.trim())
+              .find((line) => line && !line.startsWith('#') && line.startsWith('file://'));
+            if (!candidate) return null;
+            const clean = decodeURIComponent(candidate.replace(/^file:\/\//, ''));
+            const lower = clean.toLowerCase();
+            if (!['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'].some((suffix) => lower.endsWith(suffix))) {
+              return null;
+            }
+            return clean;
+          }
+
+          function applyImageStudioUploadSnapshot(snapshot, { useAsReference = false } = {}) {
+            if (!snapshot || typeof snapshot !== 'object') return;
+            state.imageWorkflow = snapshot;
+            const uploadedId = String(snapshot.selected_image_id || '').trim();
+            if (uploadedId) {
+              state.selectedImageId = uploadedId;
+              if (useAsReference) {
+                updateImageGenerationSetting('compositionSourceImageId', uploadedId);
+              }
+            }
+          }
+
+          async function uploadImageStudioDroppedFiles(files, { useAsReference = false } = {}) {
+            if (!state.workspaceId || !Array.isArray(files) || !files.length) return null;
+            let latest = null;
+            for (const file of files) {
+              const formData = new FormData();
+              formData.append('asset', file);
+              latest = await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/assets`, {
+                method: 'POST',
+                body: formData,
+              });
+            }
+            applyImageStudioUploadSnapshot(latest, { useAsReference });
+            await loadWorkspaces();
+            await loadReview();
+            return latest;
+          }
+
+          async function importImageStudioDroppedPath(imagePath, { useAsReference = false } = {}) {
+            if (!state.workspaceId || !imagePath) return null;
+            const payload = await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/import-path`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ image_path: imagePath }),
+            });
+            applyImageStudioUploadSnapshot(payload, { useAsReference });
+            await loadWorkspaces();
+            await loadReview();
+            return payload;
+          }
+
+          async function generateImageStudioImages() {
+            if (!state.workspaceId) return;
+            const promptInput = document.getElementById('image-studio-prompt');
+            const prompt = String(promptInput?.value || '').trim();
+            if (!prompt) {
+              window.alert('Describe the image you want first.');
+              return;
+            }
+            const autoRefine = imageRefinePayload();
+            const generation = imageGenerationPayload();
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/generate`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  prompt,
+                  auto_refine: autoRefine,
+                  ...generation,
+                  count: autoRefine.enabled ? 1 : generation.count,
+                }),
+              });
+              if (promptInput) promptInput.value = '';
+              await loadWorkspaces();
+              await loadReview();
+            } catch (error) {
+              window.alert(error.message || 'Could not generate images.');
+            }
+          }
+
+          async function describeSelectedImageReference(sourceImageId = null) {
+            if (!state.workspaceId) return;
+            const selected = String(sourceImageId || selectedImageStudioAsset()?.id || '').trim();
+            if (!selected) {
+              window.alert('Choose an image before asking Alcove to describe it.');
+              return;
+            }
+            try {
+              const payload = await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/describe-reference`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  source_image_id: selected,
+                }),
+              });
+              const reference = payload?.reference || null;
+              state.imageReferenceResult = reference ? { ...reference, source_image_id: selected } : null;
+              await loadReview();
+              const promptInput = document.getElementById('image-studio-prompt');
+              if (promptInput && reference?.suggested_prompt) {
+                promptInput.value = String(reference.suggested_prompt || '').trim();
+                promptInput.focus();
+                promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+              }
+              await loadWorkspaces();
+            } catch (error) {
+              window.alert(error.message || 'Could not describe that reference image.');
+            }
+          }
+
+          async function deleteImageStudioAsset(sourceImageId = null) {
+            if (!state.workspaceId) return;
+            const selected = String(sourceImageId || selectedImageStudioAsset()?.id || '').trim();
+            if (!selected) {
+              window.alert('Choose an image before asking Alcove to delete it.');
+              return;
+            }
+            const source = imageStudioWorkflow()?.images?.find((image) => String(image.id || '') === selected) || null;
+            const label = String(source?.label || 'this image').trim() || 'this image';
+            const confirmed = window.confirm(`Delete ${label} from the library? This also removes any saved 3D or video results tied to it.`);
+            if (!confirmed) return;
+            try {
+              await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/assets/${encodeURIComponent(selected)}`, {
+                method: 'DELETE',
+              });
+              if (String(state.imageReferenceResult?.source_image_id || '') === selected) {
+                state.imageReferenceResult = null;
+              }
+              await loadWorkspaces();
+              await loadReview();
+            } catch (error) {
+              window.alert(error.message || 'Could not delete that image.');
+            }
+          }
+
+          function renderImageStudioPane(workflow) {
+            const images = Array.isArray(workflow?.images) ? workflow.images : [];
+            const selectedImage = selectedImageStudioAsset();
+            const refine = state.imageRefineSettings || { enabled: false, threshold: 0.78, maxRetries: 1 };
+            const generation = imageGenerationPayload(workflow);
+            const generationProfiles = imageGenerationProfiles(workflow);
+            const generationCounts = imageGenerationCountOptions(workflow);
+            const compositionSource = compositionSourceImage(workflow);
+            const generationQueue = imageGenerationQueue(workflow);
+            const selectedImageId = String(selectedImage?.id || '');
+            const referenceResult =
+              state.imageReferenceResult && String(state.imageReferenceResult.source_image_id || '') === selectedImageId
+                ? state.imageReferenceResult
+                : null;
+            const promptPlaceholder =
+              selectedImage?.prompt ||
+              'A clean toy-like explorer figurine with a strong silhouette, soft studio lighting, and a collectible feel.';
+            return `
+              <section class="studio-shell image-studio-shell">
+                <section class="image-studio-panel image-studio-controls">
+                  <div class="studio-meta">
+                    <div class="studio-pill">${escapeHtml(studioKindLabel(state.workspace?.workspace_kind || 'studio_image'))}</div>
+                    <div class="studio-pill">${escapeHtml(String(images.length))} images</div>
+                    <div class="studio-pill">${escapeHtml(String((generationQueue.items || []).length + (generationQueue.active ? 1 : 0)))} queued</div>
+                  </div>
+                  ${renderImageGenerationQueue(workflow)}
+                  <label class="image-studio-label" for="image-studio-prompt">Prompt</label>
+                  <textarea id="image-studio-prompt" class="image-studio-prompt" placeholder="${escapeHtml(promptPlaceholder)}"></textarea>
+                  ${
+                    compositionSource
+                      ? `
+                        <div class="image-studio-reference-row">
+                          <div class="image-studio-pill-row">
+                            <strong>Using ${escapeHtml(compositionSource.label || 'selected image')} as a reference</strong>
+                            <button type="button" onclick="clearImageCompositionSource()">Clear</button>
+                          </div>
+                          <div class="image-studio-pill-row">
+                            <div class="image-studio-pill-group" role="tablist" aria-label="Reference mode">
+                              <button class="image-studio-pill${generation.remix_mode !== 'remix' ? ' is-active' : ''}" type="button" onclick="updateImageGenerationSetting('remixMode', 'match'); renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });">Match</button>
+                              <button class="image-studio-pill${generation.remix_mode === 'remix' ? ' is-active' : ''}" type="button" onclick="updateImageGenerationSetting('remixMode', 'remix'); renderReviewPane(state.review || { run: state.runStatus, checks: {}, changed_files: [] });">Remix</button>
+                            </div>
+                          </div>
+                          <p class="image-studio-help">
+                            ${escapeHtml(
+                              compositionSource.source === 'generated'
+                                ? 'Generated images automatically reuse their stored seed when you use them as a reference. Match stays closer; Remix wanders more.'
+                                : 'Uploaded references do not carry a seed, so Alcove uses the image itself as the reference and lets Match or Remix control how far to drift.'
+                            )}
+                          </p>
+                        </div>
+                      `
+                      : ''
+                  }
+                  <div class="image-studio-button-row">
+                    <button class="primary" type="button" onclick="generateImageStudioImages()">${escapeHtml(imageGenerateButtonLabel(workflow))}</button>
+                    <button type="button" onclick="triggerImageStudioUpload()">Upload Image</button>
+                    <input id="image-studio-upload" type="file" accept="image/*" hidden onchange="uploadImageStudioAsset(event)" />
+                  </div>
+                  <p class="image-studio-help">${escapeHtml(workflow?.generation_help || 'Use the smaller local aspect presets for the most reliable image runs.')}</p>
+                  <details class="studio-advanced">
+                    <summary>Settings</summary>
+                    <div class="image-studio-advanced-grid">
+                      <label class="image-studio-inline-field" for="image-studio-count">
+                        <span># of generations</span>
+                        <select id="image-studio-count" onchange="updateImageGenerationSetting('count', this.value)">
+                          ${generationCounts.map((count) => `
+                            <option value="${escapeHtml(String(count))}"${Number(count) === Number(generation.count || workflow?.default_generation_count || 1) ? ' selected' : ''}>
+                              ${escapeHtml(`${count} image${Number(count) === 1 ? '' : 's'}`)}
+                            </option>
+                          `).join('')}
+                        </select>
+                      </label>
+                      <label class="image-studio-inline-field" for="image-studio-size-profile">
+                        <span>Aspect</span>
+                        <select id="image-studio-size-profile" onchange="updateImageGenerationSetting('sizeProfileId', this.value)">
+                          ${generationProfiles.map((profile) => `
+                            <option value="${escapeHtml(String(profile.id || ''))}"${String(profile.id || '') === String(generation.size_profile_id || '') ? ' selected' : ''}>
+                              ${escapeHtml(`${profile.label || 'Preset'} · ${profile.display_size || ''}`)}
+                            </option>
+                          `).join('')}
+                        </select>
+                      </label>
+                      <label class="image-studio-inline-field" for="image-studio-passes">
+                        <span>Passes</span>
+                        <select id="image-studio-passes" onchange="updateImageGenerationSetting('passes', this.value)">
+                          ${imageGenerationPassOptions(workflow).map((passes) => `
+                            <option value="${escapeHtml(String(passes))}"${Number(passes) === Number(generation.passes || workflow?.default_generation_passes || 8) ? ' selected' : ''}>
+                              ${escapeHtml(`${passes} passes`)}
+                            </option>
+                          `).join('')}
+                        </select>
+                      </label>
+                      <p class="image-studio-help">Auto-refine always judges and saves one candidate, even if the generation count above is higher.</p>
+                      <label class="image-studio-checkbox">
+                        <input
+                          type="checkbox"
+                          ${refine.enabled ? 'checked' : ''}
+                          onchange="updateImageRefineSetting('enabled', this.checked)"
+                        />
+                        <span>Judge and retry one candidate before saving it</span>
+                      </label>
+                      <label class="image-studio-inline-field">
+                        <span>Strictness</span>
+                        <select onchange="updateImageRefineSetting('threshold', this.value)">
+                          <option value="0.62"${Number(refine.threshold) === 0.62 ? ' selected' : ''}>Loose pass</option>
+                          <option value="0.72"${Number(refine.threshold) === 0.72 ? ' selected' : ''}>Gentle critic</option>
+                          <option value="0.78"${Number(refine.threshold) === 0.78 ? ' selected' : ''}>Balanced</option>
+                          <option value="0.86"${Number(refine.threshold) === 0.86 ? ' selected' : ''}>Exacting</option>
+                          <option value="0.93"${Number(refine.threshold) === 0.93 ? ' selected' : ''}>Director mode</option>
+                        </select>
+                      </label>
+                      <label class="image-studio-inline-field">
+                        <span>Max retries</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="3"
+                          value="${escapeHtml(String(refine.maxRetries ?? 1))}"
+                          onchange="updateImageRefineSetting('maxRetries', this.value)"
+                        />
+                      </label>
+                      <p class="image-studio-help">${escapeHtml(workflow?.auto_refine_help || 'Optional judge-and-retry loop for one image at a time.')}</p>
+                    </div>
+                  </details>
+                  <p class="image-studio-help">${escapeHtml(workflow?.help_text || studioSummaryPrompt('studio_image'))}</p>
+                </section>
+                <section class="image-studio-panel">
+                  <div class="image-studio-section-head">
+                    <h3>Library</h3>
+                    <p>Pick a favorite to inspect its prompt and details.</p>
+                  </div>
+                  ${
+                    images.length
+                      ? `<div class="image-studio-grid">${images.map((image) => `
+                          <article class="image-studio-card-shell">
+                            <button class="image-studio-card${String(image.id || '') === String(state.selectedImageId || workflow?.selected_image_id || '') ? ' is-selected' : ''}" type="button" onclick="selectImageStudioAsset('${escapeHtml(String(image.id || ''))}')">
+                              <img src="${escapeHtml(image.url || '')}" alt="${escapeHtml(image.label || 'Image')}" />
+                              <div class="image-studio-card-copy">
+                                <strong>${escapeHtml(image.label || 'Image')}</strong>
+                                <span>${escapeHtml(image.source === 'upload' ? 'Uploaded' : 'Generated')}</span>
+                                ${[
+                                  image.review_status
+                                    ? `<span class="image-studio-inline-status">Refine ${escapeHtml(image.review_status)}</span>`
+                                    : '',
+                                ].filter(Boolean).join('')}
+                              </div>
+                            </button>
+                            <div class="image-studio-card-actions">
+                              <label class="image-studio-card-toggle">
+                                <input
+                                  type="checkbox"
+                                  ${String(image.id || '') === String(state.imageGenerationSettings?.compositionSourceImageId || '') ? 'checked' : ''}
+                                  onchange="toggleImageCompositionSource('${escapeHtml(String(image.id || ''))}', this.checked)"
+                                />
+                                <span>Use as reference</span>
+                              </label>
+                              <button class="image-studio-card-delete" type="button" onclick="deleteImageStudioAsset('${escapeHtml(String(image.id || ''))}')">Delete</button>
+                            </div>
+                          </article>
+                        `).join('')}</div>`
+                      : `<div class="studio-empty">${escapeHtml(studioEmptyState('studio_image'))}</div>`
+                  }
+                </section>
+                <section class="image-studio-panel image-studio-detail">
+                  ${
+                    selectedImage
+                      ? `
+                        <div class="image-studio-section-head">
+                          <h3>${escapeHtml(selectedImage.label || 'Selected Image')}</h3>
+                          <p>${escapeHtml(selectedImage.source === 'upload' ? 'Uploaded source image' : 'Generated candidate')}</p>
+                        </div>
+                        <img class="image-studio-detail-preview" src="${escapeHtml(selectedImage.url || '')}" alt="${escapeHtml(selectedImage.label || 'Selected image')}" />
+                        <div class="image-studio-meta-list">
+                          <div><strong>Source</strong><span>${escapeHtml(selectedImage.source === 'upload' ? 'Upload' : 'Generation')}</span></div>
+                          <div><strong>Prompt</strong><span>${escapeHtml(selectedImage.prompt || selectedImage.prompt_context || 'No prompt captured')}</span></div>
+                          ${
+                            selectedImage.metadata?.seed
+                              ? `<div><strong>Seed</strong><span>${escapeHtml(String(selectedImage.metadata.seed))}</span></div>`
+                              : ''
+                          }
+                          ${
+                            selectedImage.metadata?.width && selectedImage.metadata?.height
+                              ? `<div><strong>Size</strong><span>${escapeHtml(String(selectedImage.metadata.width))} x ${escapeHtml(String(selectedImage.metadata.height))}</span></div>`
+                              : ''
+                          }
+                          ${
+                            selectedImage.metadata?.composition_source_label
+                              ? `<div><strong>Built From</strong><span>${escapeHtml(String(selectedImage.metadata.composition_source_label || 'Reference'))} · ${escapeHtml(String(selectedImage.metadata.generation_mode || 'match'))}</span></div>`
+                              : ''
+                          }
+                          ${
+                            selectedImage.review_status
+                              ? `<div><strong>Refine</strong><span>${escapeHtml(selectedImage.review_status)}${selectedImage.review_score ? ` · ${escapeHtml(Number(selectedImage.review_score).toFixed(2))}` : ''}</span></div>`
+                              : ''
+                          }
+                          ${
+                            selectedImage.review_attempts
+                              ? `<div><strong>Attempts</strong><span>${escapeHtml(String(selectedImage.review_attempts))}</span></div>`
+                              : ''
+                          }
+                        </div>
+                        ${
+                          selectedImage.review_notes
+                            ? `<p class="image-studio-help">${escapeHtml(selectedImage.review_notes)}</p>`
+                            : ''
+                        }
+                        <div class="image-studio-detail-actions">
+                          <button type="button" onclick="describeSelectedImageReference('${escapeHtml(selectedImageId)}')">Describe Reference</button>
+                          <button type="button" onclick="deleteImageStudioAsset('${escapeHtml(selectedImageId)}')">Delete</button>
+                        </div>
+                        ${
+                          referenceResult
+                            ? `<p class="image-studio-help">Reference prompt loaded. ${escapeHtml(referenceResult.reference_summary || referenceResult.notes || '')}</p>`
+                            : ''
+                        }
+                      `
+                      : `
+                        <div class="studio-empty">
+                          Choose an image from the library to see details and metadata.
+                        </div>
+                      `
+                  }
+                </section>
+              </section>
+            `;
           }
 
           function renderStudioPane() {
             const workspace = state.workspace || {};
-            const links = studioWorkspaceLinks(workspace);
+            if (String(workspace.workspace_kind || '') === 'studio_image') {
+              syncImageStudioSelection(imageStudioWorkflow());
+              syncImageGenerationSettings(imageStudioWorkflow());
+              return renderImageStudioPane(imageStudioWorkflow());
+            }
             const previewUrl = workspace.preview_url ? `${workspace.preview_url}${workspace.preview_url.includes('?') ? '&' : '?'}v=${Date.now()}` : '';
-            const publishUrl = workspace.publish_url || '';
             const workspaceKind = workspace.workspace_kind || 'studio_game';
-            const previewLink = links.preview_current || '';
-            const phonePreviewLink = links.preview_phone || '';
             return `
               <section class="studio-shell">
                 <section class="studio-preview-card">
@@ -2565,17 +4529,7 @@ def render_web_app() -> str:
                       <div class="studio-pill">${escapeHtml(childFriendlyPreviewState(workspace))}</div>
                       <div class="studio-pill">${escapeHtml(workspace.publish_state === 'published' ? 'Published' : 'Not Published')}</div>
                     </div>
-                    <div class="studio-preview-actions">
-                      ${previewLink ? `<button type="button" onclick="openStudioWorkspaceLink('preview_current')">${escapeHtml(studioPrimaryAction(workspaceKind))} Link</button>` : ''}
-                      ${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Link</button>` : ''}
-                      ${publishUrl ? `<a href="${escapeHtml(publishUrl)}" target="_blank" rel="noreferrer">Share Link</a>` : '<span class="studio-preview-label">Share link appears after Publish.</span>'}
-                    </div>
                   </div>
-                  ${
-                    previewLink
-                      ? `<div class="studio-preview-link-row"><div class="studio-preview-link-copy"><strong>${escapeHtml(studioPrimaryAction(workspaceKind))} address:</strong> ${escapeHtml(previewLink)}</div>${phonePreviewLink ? `<button type="button" onclick="copyStudioWorkspaceLink('preview_phone')">Copy Phone Address</button>` : `<button type="button" onclick="copyStudioWorkspaceLink('preview_current')">Copy Address</button>`}</div>`
-                      : ''
-                  }
                   ${
                     previewUrl
                       ? `<iframe class="studio-preview-frame" src="${escapeHtml(previewUrl)}" title="${escapeHtml(studioArtifactNoun(workspaceKind))} preview"></iframe>`
@@ -2625,6 +4579,7 @@ def render_web_app() -> str:
           }
 
           async function selectWorkspace(workspaceId, conversationIdOverride = null) {
+            state.workspaceDetailsOpenId = null;
             state.workspaceId = workspaceId;
             const workspace = await fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
             state.workspace = workspace;
@@ -2635,6 +4590,9 @@ def render_web_app() -> str:
             renderWorkspaces((await fetchJson('/api/workspaces')).workspaces || []);
             await loadConversationDetail();
             await loadReview();
+            if (isSettingsOpen()) {
+              await loadConversationSettings();
+            }
           }
 
           async function loadConversationDetail() {
@@ -2672,6 +4630,7 @@ def render_web_app() -> str:
           async function loadReview() {
             if (!state.conversationId || !state.workspaceId) {
               renderReviewPane({ run: state.runStatus, checks: {}, changed_files: [] });
+              refreshWorkloadIndicators();
               return;
             }
             try {
@@ -2679,8 +4638,10 @@ def render_web_app() -> str:
                 `/api/review?conversation_id=${encodeURIComponent(state.conversationId)}&workspace_id=${encodeURIComponent(state.workspaceId)}`
               );
               renderReviewPane(payload);
+              refreshWorkloadIndicators();
             } catch (_) {
               renderReviewPane({ run: state.runStatus, checks: {}, changed_files: [] });
+              refreshWorkloadIndicators();
             }
           }
 
@@ -2766,48 +4727,42 @@ def render_web_app() -> str:
             select.value = selectedValue || '';
           }
 
-          function modelOptionUnion(ollamaModels) {
-            const codexOptions = CODEX_MODEL_OPTIONS.map((item) => ({ value: item.value, label: item.label }));
-            const ollamaOptions = (ollamaModels || []).map((model) => ({ value: model, label: `${model} (Ollama)` }));
-            return [...codexOptions, ...ollamaOptions];
+          function openSourceModelOptions(ollamaModels) {
+            return (ollamaModels || []).map((model) => ({ value: model, label: `${model} (Ollama)` }));
+          }
+
+          function updateRuntimeSettingsVisibility() {
+            const family = document.getElementById('settings-runtime-family')?.value || 'codex';
+            const openAiLabel = document.getElementById('settings-openai-model-label');
+            const openAiModel = document.getElementById('settings-openai-model');
+            if (openAiLabel) {
+              const showOpenAi = family === 'codex';
+              openAiLabel.hidden = !showOpenAi;
+              openAiLabel.style.display = showOpenAi ? '' : 'none';
+            }
+            if (openAiModel) {
+              openAiModel.disabled = family !== 'codex';
+            }
           }
 
           async function loadSettings() {
             const payload = await fetchJson('/api/settings');
-            document.getElementById('settings-provider').value = payload.provider || 'codex';
+            document.getElementById('settings-runtime-family').value = payload.provider || 'codex';
             document.getElementById('settings-ollama-host').value = payload.ollama_host || 'http://127.0.0.1:11434';
-            document.getElementById('settings-max-step-retries').value = String(payload.max_step_retries ?? 2);
-            document.getElementById('settings-phase-timeout').value = String(payload.phase_timeout_seconds ?? 240);
+            document.getElementById('settings-context-char-cap').value =
+              payload.context_char_cap == null ? '' : String(payload.context_char_cap);
             setSelectOptions(
-              'settings-model',
-              modelOptionUnion([]),
-              payload.model || 'gpt-5.3-codex',
+              'settings-openai-model',
+              OPENAI_MODEL_OPTIONS,
+              payload.openai_model || 'gpt-5.3-codex',
               { allowBlank: false }
             );
-            setSelectOptions(
-              'settings-planner-model',
-              modelOptionUnion([]),
-              payload.planner_model || '',
-              { allowBlank: true, blankLabel: 'Use default model' }
-            );
-            setSelectOptions(
-              'settings-builder-model',
-              modelOptionUnion([]),
-              payload.builder_model || '',
-              { allowBlank: true, blankLabel: 'Use default model' }
-            );
-            setSelectOptions(
-              'settings-reviewer-model',
-              modelOptionUnion([]),
-              payload.reviewer_model || '',
-              { allowBlank: true, blankLabel: 'Use default model' }
-            );
-            setSelectOptions(
-              'settings-vision-model',
-              modelOptionUnion([]),
-              payload.vision_model || '',
-              { allowBlank: true, blankLabel: 'Use default model' }
-            );
+            setSelectOptions('settings-open-source-model', [], payload.open_source_model || '', {
+              allowBlank: true,
+              blankLabel: 'Choose a model',
+            });
+            updateRuntimeSettingsVisibility();
+            updateContextCapHint();
           }
 
           function renderConnectionsPanel() {
@@ -2898,6 +4853,227 @@ def render_web_app() -> str:
             `;
           }
 
+          function isSettingsOpen() {
+            const modal = document.getElementById('settings-modal');
+            return Boolean(modal && !modal.hidden);
+          }
+
+          function setConversationSettingsStatus(message = '') {
+            const status = document.getElementById('conversation-settings-status');
+            if (status) status.textContent = message;
+          }
+
+          function closeConversationActionMenus() {
+            document.querySelectorAll('.settings-action-menu[open]').forEach((menu) => {
+              menu.open = false;
+            });
+          }
+
+          function conversationRecordById(conversationId) {
+            return (state.settingsConversations || []).find((item) => String(item.id) === String(conversationId))
+              || (state.conversationCache && String(state.conversationCache.id) === String(conversationId) ? state.conversationCache : null);
+          }
+
+          function conversationMessageCountLabel(conversation) {
+            const count = Number(conversation?.message_count ?? (conversation?.messages || []).length ?? 0);
+            return `${count} ${count === 1 ? 'message' : 'messages'}`;
+          }
+
+          function queuedItemsForCurrentConversation() {
+            if (!state.workspaceId || !state.conversationId) return [];
+            const activeWorkspaceId = String(state.workspaceId);
+            const activeConversationId = String(state.conversationId);
+            const reviewMatches =
+              String(state.review?.workspace_id || '') === activeWorkspaceId &&
+              String(state.review?.conversation_id || '') === activeConversationId;
+            if (reviewMatches && Array.isArray(state.review?.queue?.items)) {
+              return state.review.queue.items;
+            }
+            const queuedRuns = Array.isArray(state.runStatus?.queued_runs) ? state.runStatus.queued_runs : [];
+            return queuedRuns.filter((item) =>
+              String(item.workspace_id || '') === activeWorkspaceId &&
+              String(item.conversation_id || '') === activeConversationId
+            );
+          }
+
+          function renderComposerQueue() {
+            const host = document.getElementById('composer-queue');
+            if (!host) return;
+            const queuedItems = queuedItemsForCurrentConversation();
+            if (!queuedItems.length) {
+              host.hidden = true;
+              host.innerHTML = '';
+              return;
+            }
+            const visibleItems = queuedItems.slice(0, 3);
+            const overflow = Math.max(0, queuedItems.length - visibleItems.length);
+            host.hidden = false;
+            host.innerHTML = `
+              <div class="composer-queue-head">
+                <p class="composer-queue-label">Queued Messages</p>
+                <span class="composer-queue-count">${escapeHtml(String(queuedItems.length))} waiting</span>
+              </div>
+              <div class="composer-queue-list">
+                ${visibleItems.map((item) => `
+                  <div class="composer-queue-item">
+                    <span class="composer-queue-index">#${escapeHtml(String(item.position || '?'))}</span>
+                    <span class="composer-queue-preview">${escapeHtml(item.content_preview || 'Queued message')}</span>
+                  </div>
+                `).join('')}
+                ${
+                  overflow > 0
+                    ? `<div class="composer-queue-item"><span class="composer-queue-index">+</span><span class="composer-queue-preview">${escapeHtml(String(overflow))} more queued</span></div>`
+                    : ''
+                }
+              </div>
+            `;
+          }
+
+          function recommendedContextCharCap(provider, model) {
+            const providerText = String(provider || '').trim().toLowerCase();
+            const modelText = String(model || '').trim().toLowerCase();
+            if (providerText === 'codex' || modelText.startsWith('gpt-5') || modelText.includes('codex')) {
+              return 100000;
+            }
+            return 12000;
+          }
+
+          function contextCapSourceLabel(source) {
+            if (source === 'manual') return 'Manual cap';
+            if (source === 'provider-default') return 'Codex default';
+            return 'Default cap';
+          }
+
+          function updateContextCapHint() {
+            const input = document.getElementById('settings-context-char-cap');
+            const hint = document.getElementById('settings-context-char-cap-hint');
+            const provider = document.getElementById('settings-runtime-family')?.value || 'codex';
+            const model = provider === 'codex'
+              ? (document.getElementById('settings-openai-model')?.value || '')
+              : (document.getElementById('settings-open-source-model')?.value || '');
+            if (!input || !hint) return;
+            const autoCap = recommendedContextCharCap(provider, model);
+            const raw = String(input.value || '').trim();
+            if (!raw) {
+              hint.textContent =
+                `Auto uses ${formatCount(autoCap)} chars for ${provider === 'codex' ? 'OpenAI/GPT-5' : 'Open Source/Ollama'}.`;
+              return;
+            }
+            const manualCap = Math.max(100, Number(raw) || 0);
+            hint.textContent =
+              `Manual cap: ${formatCount(manualCap)} chars. Auto for this provider/model would be ${formatCount(autoCap)}.`;
+          }
+
+          function renderConversationSettingsPanel(conversations) {
+            const host = document.getElementById('conversation-settings-panel');
+            if (!host) return;
+            if (!state.workspaceId || !state.conversationId) {
+              state.settingsConversations = [];
+              host.innerHTML = '<div class="archived-chat-empty">Choose a workspace to manage its chats.</div>';
+              return;
+            }
+            state.settingsConversations = Array.isArray(conversations) ? conversations : [];
+            const current = conversationRecordById(state.conversationId);
+            if (!current) {
+              host.innerHTML = '<div class="archived-chat-empty">Conversation details are not available yet.</div>';
+              return;
+            }
+            const contextWindow = current.context_window || {};
+            const transcriptChars = Number(contextWindow.transcript_chars || 0);
+            const contextChars = Number(contextWindow.context_chars || 0);
+            const contextCharCap = Math.max(1, Number(contextWindow.context_char_cap || 0));
+            const usagePercent = Math.min(100, Math.round((transcriptChars / contextCharCap) * 100));
+            const summaryActive = Boolean(contextWindow.summary_active);
+            const approxTokens = Number(contextWindow.approx_tokens || 0);
+            const archived = state.settingsConversations.filter((item) => item.is_archived);
+            host.innerHTML = `
+              <div class="conversation-settings-card">
+                <div class="conversation-settings-head">
+                  <div>
+                    <p class="conversation-settings-label">Current Chat</p>
+                    <p class="conversation-settings-title">${escapeHtml(current.title || 'New conversation')}</p>
+                    <p class="conversation-settings-meta">
+                      ${escapeHtml(conversationMessageCountLabel(current))} · Updated ${escapeHtml(formatStamp(current.updated_at))}
+                    </p>
+                  </div>
+                  <details class="settings-action-menu">
+                    <summary>Conversation Actions</summary>
+                    <div class="settings-action-list">
+                      <button type="button" onclick="clearConversation()">Clear Chat</button>
+                      <button type="button" onclick="archiveConversation()">Archive Chat</button>
+                      <button class="settings-danger" type="button" onclick="deleteConversationPermanently()">Delete Permanently</button>
+                    </div>
+                  </details>
+                </div>
+                <div class="conversation-context-card">
+                  <div class="conversation-context-head">
+                    <div>
+                      <p class="conversation-settings-label">Context History</p>
+                      <p class="conversation-settings-title">${escapeHtml(formatCount(transcriptChars))} / ${escapeHtml(formatCount(contextCharCap))} chars</p>
+                      <p class="conversation-settings-meta">
+                        Prompting with ${escapeHtml(formatCount(contextChars))} chars (~${escapeHtml(formatCount(approxTokens))} tokens).
+                      </p>
+                    </div>
+                    <div class="conversation-context-badges">
+                      <span class="conversation-context-badge ${summaryActive ? 'is-active' : ''}">
+                        ${summaryActive ? 'Summary active' : 'Full transcript'}
+                      </span>
+                      <span class="conversation-context-badge">${escapeHtml(contextCapSourceLabel(contextWindow.cap_source))}</span>
+                    </div>
+                  </div>
+                  <div class="conversation-context-meter" aria-hidden="true"><span style="width: ${usagePercent}%;"></span></div>
+                  <p class="conversation-settings-meta">
+                    ${
+                      summaryActive
+                        ? 'Earlier messages are being summarized before they go back into the next Codex prompt.'
+                        : 'This chat is still small enough to send its full transcript directly.'
+                    }
+                  </p>
+                </div>
+                <div>
+                  <p class="conversation-settings-label">Archived Chats</p>
+                  ${
+                    archived.length
+                      ? `<div class="archived-chat-list">${archived.map((conversation) => `
+                          <div class="archived-chat-item">
+                            <div>
+                              <p class="conversation-settings-title">${escapeHtml(conversation.title || 'Archived conversation')}</p>
+                              <p class="conversation-settings-meta">
+                                ${escapeHtml(conversationMessageCountLabel(conversation))} · Archived ${escapeHtml(formatStamp(conversation.archived_at))}
+                              </p>
+                            </div>
+                            <div class="archived-chat-actions">
+                              <button type="button" onclick="restoreArchivedConversation('${escapeHtml(String(conversation.id))}')">Restore</button>
+                              <button class="settings-danger" type="button" onclick="deleteConversationPermanently('${escapeHtml(String(conversation.id))}')">Delete</button>
+                            </div>
+                          </div>
+                        `).join('')}</div>`
+                      : '<div class="archived-chat-empty">No archived chats in this workspace yet.</div>'
+                  }
+                </div>
+              </div>
+            `;
+          }
+
+          async function loadConversationSettings() {
+            const host = document.getElementById('conversation-settings-panel');
+            if (!host) return;
+            if (!state.workspaceId || !state.conversationId) {
+              renderConversationSettingsPanel([]);
+              setConversationSettingsStatus('');
+              return;
+            }
+            host.innerHTML = '<div class="archived-chat-empty">Loading conversation tools…</div>';
+            try {
+              const payload = await fetchJson(
+                `/api/workspaces/${encodeURIComponent(state.workspaceId)}/conversations?include_archived=1`
+              );
+              renderConversationSettingsPanel(payload.conversations || []);
+            } catch (error) {
+              host.innerHTML = `<div class="archived-chat-empty">${escapeHtml(error.message || 'Could not load conversation tools.')}</div>`;
+            }
+          }
+
           function openSettings() {
             const modal = document.getElementById('settings-modal');
             if (!modal) return;
@@ -2908,12 +5084,17 @@ def render_web_app() -> str:
               const status = document.getElementById('settings-status');
               if (status) status.textContent = error.message || 'Could not load settings.';
             });
+            loadConversationSettings().catch((error) => {
+              const host = document.getElementById('conversation-settings-panel');
+              if (host) host.innerHTML = `<div class="archived-chat-empty">${escapeHtml(error.message || 'Could not load conversation tools.')}</div>`;
+            });
             refreshOllamaModels().catch(() => {});
           }
 
           function closeSettings() {
             const modal = document.getElementById('settings-modal');
             if (!modal) return;
+            closeConversationActionMenus();
             modal.hidden = true;
           }
 
@@ -2941,43 +5122,54 @@ def render_web_app() -> str:
             const themeLabel = document.getElementById('studio-theme-label');
             const themePrompt = document.getElementById('studio-theme-prompt');
             const options = STUDIO_TEMPLATES[workspaceKind] || STUDIO_TEMPLATES.studio_game;
+            const currentTemplate = templateSelect?.value || '';
             if (templateSelect) {
               templateSelect.innerHTML = options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('');
+              if (options.some((option) => option.value === currentTemplate)) {
+                templateSelect.value = currentTemplate;
+              }
             }
+            const selectedTemplate = templateSelect?.value || options[0]?.value || '';
+            const defaults = studioTemplateDefaults(workspaceKind, selectedTemplate);
             if (titleLabel) {
               titleLabel.firstChild.textContent =
                 workspaceKind === 'studio_game' ? 'Game name' :
+                workspaceKind === 'studio_image' ? 'Collection name' :
+                workspaceKind === 'studio_video' ? 'Video lab name' :
                 workspaceKind === 'studio_web' ? 'Site name' :
                 workspaceKind === 'studio_data' ? 'Dataset name' :
                 'Docs name';
             }
             if (themeLabel) {
-              themeLabel.firstChild.textContent = workspaceKind === 'studio_data' ? 'Focus prompt (optional)' : 'Theme prompt (optional)';
+              themeLabel.firstChild.textContent =
+                workspaceKind === 'studio_data'
+                  ? 'Focus prompt (optional)'
+                  : workspaceKind === 'studio_image'
+                    ? 'Style prompt (optional)'
+                    : workspaceKind === 'studio_video'
+                      ? 'Motion prompt (optional)'
+                    : 'Theme prompt (optional)';
             }
             if (titleInput && !titleInput.value.trim()) {
-              titleInput.placeholder = studioDefaultTitle(workspaceKind);
+              titleInput.placeholder = defaults.title || studioDefaultTitle(workspaceKind, selectedTemplate);
             }
             if (themePrompt && !themePrompt.value.trim()) {
-              themePrompt.placeholder =
-                workspaceKind === 'studio_game' ? 'A playful jungle at sunset with friendly robots.' :
-                workspaceKind === 'studio_web' ? 'A bold launch page for a calm, premium product.' :
-                workspaceKind === 'studio_data' ? 'Revenue data with trust cues, clear trends, and simple charts.' :
-                'Helpful docs with a friendly getting started flow.';
+              themePrompt.placeholder = defaults.theme;
             }
           }
 
           async function refreshOllamaModels() {
-            const status = document.getElementById('settings-status');
+            const status = document.getElementById('settings-open-source-status');
             try {
               const settings = await fetchJson('/api/settings');
               const payload = await fetchJson('/api/providers/ollama/models');
               const models = payload.models || [];
-              const options = modelOptionUnion(models);
-              setSelectOptions('settings-model', options, settings.model || 'gpt-5.3-codex', { allowBlank: false });
-              setSelectOptions('settings-planner-model', options, settings.planner_model || '', { allowBlank: true, blankLabel: 'Use default model' });
-              setSelectOptions('settings-builder-model', options, settings.builder_model || '', { allowBlank: true, blankLabel: 'Use default model' });
-              setSelectOptions('settings-reviewer-model', options, settings.reviewer_model || '', { allowBlank: true, blankLabel: 'Use default model' });
-              setSelectOptions('settings-vision-model', options, settings.vision_model || '', { allowBlank: true, blankLabel: 'Use default model' });
+              const options = openSourceModelOptions(models);
+              setSelectOptions('settings-open-source-model', options, settings.open_source_model || '', {
+                allowBlank: true,
+                blankLabel: 'Choose a model',
+              });
+              updateContextCapHint();
               if (status) status.textContent = payload.message || `Found ${models.length} model(s).`;
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not fetch Ollama models.';
@@ -2987,22 +5179,31 @@ def render_web_app() -> str:
           async function saveSettings() {
             const status = document.getElementById('settings-status');
             try {
+              const contextCharCapRaw = String(document.getElementById('settings-context-char-cap').value || '').trim();
               const payload = await fetchJson('/api/settings', {
                 method: 'PATCH',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({
-                  provider: document.getElementById('settings-provider').value,
-                  model: document.getElementById('settings-model').value,
+                  provider: document.getElementById('settings-runtime-family').value,
+                  openai_model: document.getElementById('settings-openai-model').value,
+                  open_source_model: document.getElementById('settings-open-source-model').value,
                   ollama_host: document.getElementById('settings-ollama-host').value,
-                  planner_model: document.getElementById('settings-planner-model').value,
-                  builder_model: document.getElementById('settings-builder-model').value,
-                  reviewer_model: document.getElementById('settings-reviewer-model').value,
-                  vision_model: document.getElementById('settings-vision-model').value,
-                  max_step_retries: Number(document.getElementById('settings-max-step-retries').value || 2),
-                  phase_timeout_seconds: Number(document.getElementById('settings-phase-timeout').value || 240),
+                  context_char_cap: contextCharCapRaw ? Number(contextCharCapRaw) : null,
                 }),
               });
-              if (status) status.textContent = `Saved. Provider: ${payload.provider}, model: ${payload.model}`;
+              if (status) {
+                status.textContent =
+                  `Saved. Provider: ${payload.provider}, model: ${payload.model}, context cap: ${formatCount(payload.resolved_context_char_cap || 0)} chars.`;
+              }
+              const openSourceStatus = document.getElementById('settings-open-source-status');
+              if (openSourceStatus) openSourceStatus.textContent = '';
+              updateRuntimeSettingsVisibility();
+              updateContextCapHint();
+              if (state.conversationId && state.workspaceId) {
+                state.lastSignature = null;
+                await loadConversationDetail();
+                await loadConversationSettings();
+              }
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not save settings.';
             }
@@ -3159,10 +5360,33 @@ def render_web_app() -> str:
             return candidate || null;
           }
 
+          async function handleImageStudioDrop(dataTransfer) {
+            if (String(state.workspace?.workspace_kind || '') !== 'studio_image' || !state.workspaceId) return false;
+            const files = droppedImageFiles(dataTransfer);
+            if (files.length) {
+              await uploadImageStudioDroppedFiles(files, { useAsReference: true });
+              return true;
+            }
+            const imagePath = droppedImagePath(dataTransfer);
+            if (imagePath) {
+              await importImageStudioDroppedPath(imagePath, { useAsReference: true });
+              return true;
+            }
+            return false;
+          }
+
           async function handleWorkspaceDrop(event) {
             event.preventDefault();
             dropDepth = 0;
             setDropzoneActive(false);
+            try {
+              if (await handleImageStudioDrop(event.dataTransfer)) {
+                return;
+              }
+            } catch (error) {
+              window.alert(error.message || 'Could not import that image into Image Studio.');
+              return;
+            }
             const droppedPath = extractDroppedFolderPath(event.dataTransfer);
             if (!droppedPath) {
               window.alert('Finder did not share a folder path here. Use Import to open the native picker.');
@@ -3208,24 +5432,13 @@ def render_web_app() -> str:
             }
             if (status) status.textContent = 'Building your studio...';
             try {
-              const payload = await fetchJson('/api/studio/workspaces', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                  workspace_kind: workspaceKind,
-                  artifact_title: title,
-                  template_kind: templateKind,
-                  theme_prompt: themePrompt || null,
-                }),
+              await createStudioWorkspaceWithPayload({
+                workspace_kind: workspaceKind,
+                artifact_title: title,
+                template_kind: templateKind,
+                theme_prompt: themePrompt || null,
               });
-              state.workspace = payload.workspace;
-              state.workspaceId = payload.workspace?.id || null;
-              state.conversationId = payload.conversation?.id || payload.workspace?.active_conversation_id || null;
-              state.lastSignature = null;
               closeStudioModal();
-              await loadWorkspaces();
-              await loadConversationDetail();
-              await loadReview();
             } catch (error) {
               if (status) status.textContent = error.message || 'Could not create the studio.';
             }
@@ -3260,27 +5473,108 @@ def render_web_app() -> str:
             closeActionsMenu();
           }
 
-          async function clearConversation() {
-            if (!state.workspaceId || !state.conversationId) {
+          async function refreshAfterConversationAction(workspaceId, nextConversationId = null) {
+            state.lastSignature = null;
+            clearComposerAttachments();
+            await loadWorkspaces();
+            await selectWorkspace(workspaceId, nextConversationId);
+          }
+
+          async function clearConversation(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
               window.alert('Choose a workspace first.');
               return;
             }
-            if (!window.confirm('Clear all messages in this workspace chat?')) return;
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Clear "${title}" permanently? This erases its transcript and cannot be undone.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
             try {
-              await fetchJson(`/api/conversations/${encodeURIComponent(state.conversationId)}/clear`, {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/clear`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ workspace_id: state.workspaceId }),
               });
-              state.lastSignature = null;
-              clearComposerAttachments();
-              await loadWorkspaces();
-              await loadConversationDetail();
-              await loadReview();
+              setConversationSettingsStatus('Chat cleared.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || conversationId);
             } catch (error) {
               window.alert(error.message || 'Could not clear chat');
+              setConversationSettingsStatus(error.message || 'Could not clear chat.');
             }
             closeActionsMenu();
+          }
+
+          async function archiveConversation(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Archive "${title}"? Its messages stay stored and you can restore it later from Settings.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/archive`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ workspace_id: state.workspaceId }),
+              });
+              setConversationSettingsStatus('Chat archived.');
+              await refreshAfterConversationAction(
+                state.workspaceId,
+                payload.active_conversation_id || payload.active_conversation?.id || state.conversationId
+              );
+            } catch (error) {
+              window.alert(error.message || 'Could not archive chat');
+              setConversationSettingsStatus(error.message || 'Could not archive chat.');
+            }
+            closeActionsMenu();
+          }
+
+          async function restoreArchivedConversation(conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/restore`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ workspace_id: state.workspaceId }),
+              });
+              setConversationSettingsStatus('Archived chat restored.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || conversationId);
+            } catch (error) {
+              window.alert(error.message || 'Could not restore chat');
+              setConversationSettingsStatus(error.message || 'Could not restore chat.');
+            }
+          }
+
+          async function deleteConversationPermanently(conversationId = state.conversationId) {
+            if (!state.workspaceId || !conversationId) {
+              window.alert('Choose a workspace first.');
+              return;
+            }
+            const conversation = conversationRecordById(conversationId);
+            const title = conversation?.title || 'this chat';
+            if (!window.confirm(`Delete "${title}" permanently? This removes it from Alcove and cannot be undone.`)) return;
+            closeConversationActionMenus();
+            setConversationSettingsStatus('');
+            try {
+              const payload = await fetchJson(
+                `/api/conversations/${encodeURIComponent(conversationId)}?workspace_id=${encodeURIComponent(state.workspaceId)}`,
+                { method: 'DELETE' }
+              );
+              setConversationSettingsStatus('Chat deleted permanently.');
+              await refreshAfterConversationAction(state.workspaceId, payload.active_conversation_id || payload.id || null);
+            } catch (error) {
+              window.alert(error.message || 'Could not delete chat');
+              setConversationSettingsStatus(error.message || 'Could not delete chat.');
+            }
           }
 
           async function refreshStudioPreview() {
@@ -3428,11 +5722,17 @@ def render_web_app() -> str:
                   refreshWorkspaces = true;
                   refreshReview = true;
                 }
+                if (type.startsWith('image-workflow.')) {
+                  refreshReview = true;
+                }
               }
               if (refreshWorkspaces) await loadWorkspaces();
               if (refreshThread && state.conversationId) {
                 state.lastSignature = null;
                 await loadConversationDetail();
+              }
+              if (isSettingsOpen() && (refreshWorkspaces || refreshThread)) {
+                await loadConversationSettings();
               }
               if (refreshReview) await loadReview();
             } catch (_) {}
@@ -3958,7 +6258,7 @@ def _shell(*, sidebar_title: str, sidebar_actions: str, sidebar_body: str, main_
             window.location.reload();
           }}
           async function clearChat(workspaceId, conversationId) {{
-            if (!window.confirm('Clear all messages in this chat?')) return;
+            if (!window.confirm('Clear this chat permanently? This erases its transcript and cannot be undone.')) return;
             const response = await fetch(`/api/conversations/${{conversationId}}/clear`, {{
               method: 'POST',
               headers: {{ 'content-type': 'application/json' }},
