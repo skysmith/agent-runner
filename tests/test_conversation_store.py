@@ -125,6 +125,29 @@ def test_workspace_profile_round_trip(tmp_path: Path) -> None:
     assert reloaded.publish_slug == "moon-mango-jump"
 
 
+def test_thread_context_round_trip_and_restore(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".agent-runner" / "workspaces")
+    controller = WorkspaceConversationController(store, "workspace-1")
+    record = controller.active_conversation()
+
+    controller.set_assistant_context(
+        record.id,
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+            "open_loops": ["Send the launch link"],
+        },
+    )
+
+    reloaded = store.load_conversation(record.id, workspace_id="workspace-1")
+
+    assert reloaded is not None
+    assert reloaded.thread_context["channel"] == "sms"
+    assert reloaded.thread_context["participant_name"] == "Taylor"
+    assert reloaded.thread_context["open_loops"] == ["Send the launch link"]
+
+
 def test_derive_conversation_title_uses_first_non_empty_line() -> None:
     title = derive_conversation_title("\n\nInvestigate dashboard regression\nwith extra details")
     assert title == "Investigate dashboard regression"

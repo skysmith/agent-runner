@@ -60,6 +60,8 @@ def test_render_web_app_includes_native_image_studio_controls() -> None:
     assert "function toggleImageCompositionSource(imageId, enabled)" in html
     assert "function clearImageCompositionSource()" in html
     assert "function renderImageGenerationQueue(workflow)" in html
+    assert "function imageGenerationElapsedLabel(item)" in html
+    assert "function imageGenerationPassLabel(item)" in html
     assert "function imageGenerateButtonLabel(workflow = imageStudioWorkflow())" in html
     assert "function uploadImageStudioAsset(event)" in html
     assert "function droppedImageFiles(dataTransfer)" in html
@@ -74,10 +76,14 @@ def test_render_web_app_includes_native_image_studio_controls() -> None:
     assert "Aspect" in html
     assert "Passes" in html
     assert 'id="image-studio-passes"' in html
+    assert "Number of passes" in html
+    assert "Time to generate" in html
     assert "portrait-768x1024" in html
     assert "workflow?.generation_profiles" in html
     assert "workflow?.generation_count_options" in html
     assert "workflow?.generation_pass_options" in html
+    assert "workflow?.default_generation_passes || 2" in html
+    assert "workflow?.default_generation_passes || 8" not in html
     assert "profile.display_size" in html
     assert "Describe Reference" in html
     assert "function openImageStudioFolder()" in html
@@ -99,6 +105,8 @@ def test_render_web_app_includes_native_image_studio_controls() -> None:
     assert "Use the smaller local aspect presets for the most reliable image runs." in html
     assert "Generated images automatically reuse their stored seed when you use them as a reference." in html
     assert "image running" in html
+    assert "Image generation running${detail" in html
+    assert "window.setInterval(refreshWorkloadIndicators, 1000)" in html
     assert "image queued" in html
     assert "Last image run failed" in html
     assert ".review-scroll.studio-scroll {" in html
@@ -255,7 +263,11 @@ def test_render_web_app_uses_workspace_info_drawers_for_secondary_details() -> N
     assert "Collapse workspace details" in html
     assert 'class="workspace-remove"' in html
     assert "Remove</button>" in html
-    assert "font-weight: 400;" in html
+    assert "workspace-card-summary" in html
+    assert "workspace-card-subtitle" in html
+    assert "workspace-card-context" in html
+    assert "workspace-card-badge" in html
+    assert "font-weight: 700;" in html
     assert "justify-content: space-between;" in html
     assert "justify-content: flex-end;" in html
     assert "color: var(--warning);" in html
@@ -299,6 +311,31 @@ def test_render_web_app_keeps_studio_pane_visible_and_menu_can_reopen_review_pan
     assert "Studio stays visible in this workspace." in html
 
 
+def test_render_web_app_has_mobile_preview_path() -> None:
+    html = render_web_app()
+
+    assert 'id="mobile-preview-button"' in html
+    assert 'onclick="openMobilePreview()"' in html
+    assert "function openMobilePreview()" in html
+    assert "openMobilePane('right');" in html
+    assert ".mobile-preview-button" in html
+    assert ".mobile-preview-button { display: inline-flex;" in html
+    assert "mobilePreviewButton.textContent = isStudioWorkspace(state.workspace) ? 'Preview' : 'Review';" in html
+
+
+def test_render_web_app_surfaces_polling_stale_state() -> None:
+    html = render_web_app()
+
+    assert "apiProblem: null" in html
+    assert "function markApiProblem(area, error)" in html
+    assert "Connection stale during" in html
+    assert "setChip('global-run-chip', 'stale', 'failed');" in html
+    assert "markApiProblem('run status', error);" in html
+    assert "markApiProblem('event sync', error);" in html
+    assert "markApiProblem('review refresh', error);" in html
+    assert "server-dot-stale" in html
+
+
 def test_render_web_app_keeps_studio_link_addresses_out_of_default_studio_surface() -> None:
     html = render_web_app()
 
@@ -313,11 +350,14 @@ def test_render_web_app_keeps_studio_link_addresses_out_of_default_studio_surfac
 def test_render_web_app_uses_workspace_list_only_for_populated_home_left_pane() -> None:
     html = render_web_app()
 
-    assert '<section id="workspace-dropzone" class="workspace-grid home-list">' in html
+    assert '<section id="workspace-dropzone" class="home-workspace-browser">' in html
+    assert '<section class="workspace-grid home-list">' in html
+    assert ".home-list-head" in html
     assert ".workspace-grid.home-list" in html
     assert ".workspace-grid.home-list.is-active" in html
-    assert "padding: 0 12px 0 14px;" in html
+    assert "padding: 14px 12px 0 14px;" in html
     assert "box-sizing: border-box;" in html
+    assert "Recent Workspaces" not in html
 
 
 def test_mobile_shell_locks_mobile_zoom() -> None:

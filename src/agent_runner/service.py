@@ -40,6 +40,7 @@ from .image_workflow import (
     normalize_image_generation_passes,
     normalize_image_generation_size_profile_id,
     normalize_image_reuse_mode,
+    zimage_lora_options,
 )
 from .models import AssistantCapabilityMode, AppSettings, ChecksPolicy, ConversationRecord, ProviderKind, RunMode
 from .page_context import normalize_page_context
@@ -66,6 +67,7 @@ from .studio import (
     studio_summary_prompt,
     studio_welcome_message,
 )
+from .thread_context import merge_thread_context, normalize_thread_context, suggest_thread_title
 
 ServiceEventCallback = Callable[[str, str], None]
 ACTION_REQUEST_PATTERN = re.compile(
@@ -135,10 +137,13 @@ class QueuedImageGenerationRequest:
     auto_refine: dict[str, object] | None = None
     size_profile_id: str | None = None
     passes: int | None = None
+    lora_name: str | None = None
+    lora_strength: float | None = None
     composition_source_image_id: str | None = None
     remix_mode: str | None = None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     queued_at: str = field(default_factory=lambda: _timestamp_now())
+    started_at: str | None = None
 
     def status_payload(self, *, state: str, position: int | None = None) -> dict[str, object]:
         preview = " ".join(self.prompt.split())
@@ -148,12 +153,15 @@ class QueuedImageGenerationRequest:
             "id": self.request_id,
             "workspace_id": self.workspace_id,
             "queued_at": self.queued_at,
+            "started_at": self.started_at,
             "state": state,
             "prompt_preview": preview,
             "count": self.count,
             "auto_refine_enabled": bool((self.auto_refine or {}).get("enabled")),
             "size_profile_id": normalize_image_generation_size_profile_id(self.size_profile_id),
             "passes": normalize_image_generation_passes(self.passes),
+            "lora_name": self.lora_name,
+            "lora_strength": self.lora_strength,
             "composition_source_image_id": self.composition_source_image_id,
             "remix_mode": normalize_image_reuse_mode(self.remix_mode) if self.composition_source_image_id else None,
         }
@@ -248,11 +256,21 @@ class AgentRunnerService:
         )
         return conversations
 
-    def create_conversation(self, workspace_id: str, *, title: str | None = None) -> dict[str, object]:
+    def create_conversation(
+        self,
+        workspace_id: str,
+        *,
+        title: str | None = None,
+        thread_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         controller = self._controller(workspace_id)
         record = controller.create_conversation()
-        if title:
-            record = controller.rename_conversation(record.id, title)
+        normalized_thread_context = normalize_thread_context(thread_context)
+        effective_title = title or suggest_thread_title(normalized_thread_context)
+        if effective_title:
+            record = controller.rename_conversation(record.id, effective_title)
+        if normalized_thread_context:
+            record = controller.set_assistant_context(record.id, thread_context=normalized_thread_context)
         payload = self._record_payload(record)
         self._emit_event(
             "conversation.created",
@@ -260,12 +278,70 @@ class AgentRunnerService:
                 "workspace_id": workspace_id,
                 "conversation_id": record.id,
                 "title": record.title,
+                "has_thread_context": bool(record.thread_context),
             },
         )
         return payload
 
     def create_web_conversation(self, *, title: str | None = None) -> dict[str, object]:
         return self.create_conversation(self.DEFAULT_WEB_WORKSPACE_ID, title=title)
+
+    def deliver_external_message(
+        self,
+        *,
+        workspace_id: str,
+        content: str,
+        thread_context: dict[str, object],
+        mode: RunMode,
+        assistant_mode: AssistantCapabilityMode | None = None,
+        page_context: dict[str, object] | None = None,
+        provider: ProviderKind | None = None,
+        model: str | None = None,
+        max_step_retries: int | None = None,
+        event_callback: ServiceEventCallback | None = None,
+    ) -> dict[str, object]:
+        normalized_thread_context = normalize_thread_context(thread_context)
+        channel = str(normalized_thread_context.get("channel") or "").strip()
+        thread_key = str(normalized_thread_context.get("thread_key") or "").strip()
+        if not channel or not thread_key:
+            raise ValueError("External message delivery requires thread_context.channel and thread_context.thread_key.")
+        controller = self._controller(workspace_id)
+        matched = self._find_conversation_for_thread(
+            controller,
+            channel=channel,
+            thread_key=thread_key,
+        )
+        created_conversation = False
+        restored_conversation = False
+        if matched is None:
+            created = self.create_conversation(
+                workspace_id,
+                thread_context=normalized_thread_context,
+            )
+            conversation_id = str(created["id"])
+            created_conversation = True
+        else:
+            if matched.archived_at:
+                matched = controller.restore_conversation(matched.id)
+                restored_conversation = True
+            conversation_id = matched.id
+        response = self.send_message(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            content=content,
+            mode=mode,
+            assistant_mode=assistant_mode,
+            page_context=page_context,
+            thread_context=normalized_thread_context,
+            provider=provider,
+            model=model,
+            max_step_retries=max_step_retries,
+            event_callback=event_callback,
+        )
+        response["created_conversation"] = created_conversation
+        response["restored_conversation"] = restored_conversation
+        response["thread_context"] = normalized_thread_context
+        return response
 
     def create_studio_game(
         self,
@@ -545,6 +621,8 @@ class AgentRunnerService:
             "generation_profiles": generation_profiles,
             "generation_count_options": generation_counts,
             "generation_pass_options": generation_passes,
+            "lora_options": zimage_lora_options(),
+            "library_folder_path": store.snapshot().get("library_folder_path"),
             "default_generation_count": normalize_image_generation_count(None),
             "default_generation_profile_id": normalize_image_generation_size_profile_id(None),
             "default_generation_passes": normalize_image_generation_passes(None),
@@ -564,6 +642,8 @@ class AgentRunnerService:
         auto_refine: dict[str, object] | None = None,
         size_profile_id: str | None = None,
         passes: int | None = None,
+        lora_name: str | None = None,
+        lora_strength: float | None = None,
         composition_source_image_id: str | None = None,
         remix_mode: str | None = None,
     ) -> dict[str, object]:
@@ -576,6 +656,8 @@ class AgentRunnerService:
                 auto_refine=auto_refine,
                 size_profile_id=size_profile_id,
                 passes=passes,
+                lora_name=lora_name,
+                lora_strength=lora_strength,
                 composition_source_image_id=composition_source_image_id,
                 remix_mode=remix_mode,
             )
@@ -594,6 +676,8 @@ class AgentRunnerService:
         auto_refine: dict[str, object] | None = None,
         size_profile_id: str | None = None,
         passes: int | None = None,
+        lora_name: str | None = None,
+        lora_strength: float | None = None,
         composition_source_image_id: str | None = None,
         remix_mode: str | None = None,
     ) -> dict[str, object]:
@@ -609,6 +693,8 @@ class AgentRunnerService:
             auto_refine=auto_refine,
             size_profile_id=normalize_image_generation_size_profile_id(size_profile_id),
             passes=normalize_image_generation_passes(passes),
+            lora_name=_normalize_zimage_lora_name(lora_name),
+            lora_strength=_normalize_lora_strength(lora_strength),
             composition_source_image_id=(composition_source_image_id or "").strip() or None,
             remix_mode=normalize_image_reuse_mode(remix_mode) if composition_source_image_id else None,
         )
@@ -618,6 +704,7 @@ class AgentRunnerService:
         with self._image_generation_queue_lock:
             self._image_generation_errors.pop(workspace_id, None)
             if self._active_image_generation is None and not self._pending_image_generations:
+                request.started_at = _timestamp_now()
                 self._active_image_generation = request
                 should_start_now = True
             else:
@@ -721,6 +808,24 @@ class AgentRunnerService:
             "opened": True,
         }
 
+    def set_image_library_folder(self, *, workspace_id: str, folder_path: str) -> dict[str, object]:
+        self._require_image_workspace(workspace_id)
+        requested = Path(str(folder_path or "").strip()).expanduser()
+        if not str(requested).strip():
+            raise ValueError("Choose a folder for the image library.")
+        with self._image_workflow_lock:
+            store = self._image_store(workspace_id)
+            resolved = store.set_library_folder(requested)
+        self._emit_event(
+            "image-workflow.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "library-folder-updated",
+                "folder_path": str(resolved),
+            },
+        )
+        return self.get_image_workflow_snapshot(workspace_id)
+
     def delete_image_asset(self, *, workspace_id: str, image_id: str) -> dict[str, object]:
         self._require_image_workspace(workspace_id)
         resolved_image_id = str(image_id or "").strip()
@@ -767,6 +872,8 @@ class AgentRunnerService:
             image_path=image_path,
             ollama_host=self.app_settings.ollama_host or self.config.ollama_host,
             prompt_context=prompt_context or asset.prompt_context or asset.prompt,
+            preferred_vision_model=self.app_settings.vision_model,
+            preferred_prompt_model=self.app_settings.open_source_model or self.app_settings.model,
         )
         self._emit_event(
             "image-workflow.updated",
@@ -868,6 +975,8 @@ class AgentRunnerService:
         auto_refine: dict[str, object] | None = None,
         size_profile_id: str | None = None,
         passes: int | None = None,
+        lora_name: str | None = None,
+        lora_strength: float | None = None,
         composition_source_image_id: str | None = None,
         remix_mode: str | None = None,
     ) -> dict[str, object]:
@@ -878,6 +987,9 @@ class AgentRunnerService:
         auto_refine_config = normalize_auto_refine_config(auto_refine)
         resolved_size_profile_id = normalize_image_generation_size_profile_id(size_profile_id)
         resolved_passes = normalize_image_generation_passes(passes)
+        resolved_lora_name = _normalize_zimage_lora_name(lora_name)
+        resolved_lora_strength = _normalize_lora_strength(lora_strength)
+        prompt_for_generation = _prompt_with_lora(prompt_text, resolved_lora_name, resolved_lora_strength)
         ollama_host = self.app_settings.ollama_host or self.config.ollama_host
         generation_context = self._resolve_image_generation_context(
             workspace_id=workspace_id,
@@ -885,10 +997,11 @@ class AgentRunnerService:
             composition_source_image_id=composition_source_image_id,
             remix_mode=remix_mode,
         )
+        generation_started_at = time.perf_counter()
         if auto_refine_config.enabled:
             candidates = generate_candidates_with_auto_refine(
                 self._image_workflow_provider,
-                prompt=prompt_text,
+                prompt=prompt_for_generation,
                 prompt_context=prompt_context,
                 ollama_host=ollama_host,
                 auto_refine=auto_refine_config,
@@ -903,7 +1016,7 @@ class AgentRunnerService:
         else:
             candidates = generate_images_for_provider(
                 self._image_workflow_provider,
-                prompt=prompt_text,
+                prompt=prompt_for_generation,
                 count=normalize_image_generation_count(count),
                 size_profile_id=generation_context["size_profile_id"],
                 passes=resolved_passes,
@@ -913,6 +1026,14 @@ class AgentRunnerService:
                 strength=generation_context["strength"],
                 composition_source_image_id=generation_context["composition_source_image_id"],
             )
+        generation_duration_ms = int((time.perf_counter() - generation_started_at) * 1000)
+        for candidate in candidates:
+            metadata = dict(getattr(candidate, "metadata", {}) or {})
+            metadata.setdefault("generation_duration_ms", generation_duration_ms)
+            if resolved_lora_name:
+                metadata.setdefault("lora_name", resolved_lora_name)
+                metadata.setdefault("lora_strength", resolved_lora_strength)
+            candidate.metadata = metadata
         candidates = self._annotate_generated_candidates(
             candidates,
             generation_context=generation_context,
@@ -953,6 +1074,8 @@ class AgentRunnerService:
                 auto_refine=request.auto_refine,
                 size_profile_id=request.size_profile_id,
                 passes=request.passes,
+                lora_name=request.lora_name,
+                lora_strength=request.lora_strength,
                 composition_source_image_id=request.composition_source_image_id,
                 remix_mode=request.remix_mode,
             )
@@ -975,6 +1098,7 @@ class AgentRunnerService:
                     self._active_image_generation = None
                 if self._pending_image_generations:
                     next_request = self._pending_image_generations.popleft()
+                    next_request.started_at = _timestamp_now()
                     self._active_image_generation = next_request
             self._emit_event(
                 "image-workflow.updated",
@@ -1332,6 +1456,7 @@ class AgentRunnerService:
         mode: RunMode,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        thread_context: dict[str, object] | None = None,
         provider: ProviderKind | None = None,
         model: str | None = None,
         max_step_retries: int | None = None,
@@ -1343,16 +1468,21 @@ class AgentRunnerService:
 
         controller = self._controller(workspace_id)
         normalized_page_context = normalize_page_context(page_context)
+        normalized_thread_context = normalize_thread_context(thread_context)
         controller.select_conversation(conversation_id)
-        if assistant_mode is not None or page_context is not None:
+        active_record = controller.active_conversation()
+        effective_thread_context = merge_thread_context(active_record.thread_context, normalized_thread_context)
+        if assistant_mode is not None or page_context is not None or thread_context is not None:
             controller.set_assistant_context(
                 conversation_id,
                 assistant_mode=assistant_mode,
                 page_context=normalized_page_context if page_context is not None else None,
+                thread_context=effective_thread_context if thread_context is not None else None,
             )
         active_record = controller.active_conversation()
         effective_assistant_mode = active_record.assistant_mode
         effective_page_context = deepcopy(active_record.page_context)
+        effective_thread_context = deepcopy(active_record.thread_context)
         workspace_repo_path = self._workspace_repo_path(workspace_id)
         if mode == RunMode.LOOP and effective_assistant_mode != AssistantCapabilityMode.DEV:
             raise ValueError("Loop mode requires dev assistant capability mode.")
@@ -1402,6 +1532,7 @@ class AgentRunnerService:
             "conversation_id": conversation_id,
             "mode": str(mode),
             "assistant_mode": str(effective_assistant_mode),
+            "has_thread_context": bool(effective_thread_context),
             "queued": queued,
             "queue_position": queue_position,
         }
@@ -1413,13 +1544,16 @@ class AgentRunnerService:
         workspace_id: str | None = None,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        thread_context: dict[str, object] | None = None,
     ) -> dict[str, object]:
         record, resolved_workspace_id = self._find_conversation(conversation_id, workspace_id=workspace_id)
         controller = self._controller(resolved_workspace_id)
+        normalized_thread_context = normalize_thread_context(thread_context)
         updated = controller.set_assistant_context(
             record.id,
             assistant_mode=assistant_mode,
             page_context=normalize_page_context(page_context) if page_context is not None else None,
+            thread_context=merge_thread_context(record.thread_context, normalized_thread_context) if thread_context is not None else None,
         )
         self._emit_event(
             "conversation.updated",
@@ -1428,6 +1562,7 @@ class AgentRunnerService:
                 "conversation_id": updated.id,
                 "assistant_mode": str(updated.assistant_mode),
                 "has_page_context": bool(updated.page_context),
+                "has_thread_context": bool(updated.thread_context),
             },
         )
         return self._record_payload(updated, include_messages=True)
@@ -1775,6 +1910,7 @@ class AgentRunnerService:
             model=request.model,
         )
         active_record = controller.active_conversation()
+        effective_thread_context = deepcopy(active_record.thread_context)
         effective_context = (
             self.context_assembler.build_for_loop(
                 repo_path=request.workspace_repo_path,
@@ -1785,6 +1921,7 @@ class AgentRunnerService:
                 current_input=request.content,
                 assistant_mode=request.assistant_mode,
                 page_context=request.page_context,
+                thread_context=effective_thread_context,
                 configured_context_char_cap=self.app_settings.context_char_cap,
             )
             if request.mode == RunMode.LOOP
@@ -1797,6 +1934,7 @@ class AgentRunnerService:
                 current_input=request.content,
                 assistant_mode=request.assistant_mode,
                 page_context=request.page_context,
+                thread_context=effective_thread_context,
                 configured_context_char_cap=self.app_settings.context_char_cap,
             )
         )
@@ -2559,6 +2697,19 @@ class AgentRunnerService:
         if summary != record.summary:
             controller.update_summary(conversation_id, summary)
 
+    def _find_conversation_for_thread(
+        self,
+        controller: WorkspaceConversationController,
+        *,
+        channel: str,
+        thread_key: str,
+    ) -> ConversationRecord | None:
+        for record in controller.metadata(include_archived=True):
+            normalized = normalize_thread_context(record.thread_context)
+            if normalized.get("channel") == channel and normalized.get("thread_key") == thread_key:
+                return record
+        return None
+
     def _record_payload(self, record: ConversationRecord, *, include_messages: bool = False) -> dict[str, object]:
         workspace = self.ensure_workspace(record.workspace_id)
         provider, model = self._effective_provider_and_model()
@@ -2578,6 +2729,7 @@ class AgentRunnerService:
             "updated_at": record.updated_at,
             "assistant_mode": str(record.assistant_mode),
             "page_context": dict(record.page_context),
+            "thread_context": dict(record.thread_context),
             "summary": record.summary,
             "preview": self._conversation_preview(record),
             "workspace_kind": workspace.get("workspace_kind", "standard"),
@@ -2973,3 +3125,29 @@ def _coerce_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_zimage_lora_name(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    available = {str(item.get("name") or "") for item in zimage_lora_options()}
+    if text not in available:
+        raise ValueError(f"Unknown Z-Image LoRA: {text}")
+    return text
+
+
+def _normalize_lora_strength(value: object | None) -> float:
+    try:
+        parsed = float(value) if value is not None else 0.75
+    except (TypeError, ValueError):
+        parsed = 0.75
+    return min(max(parsed, 0.0), 2.0)
+
+
+def _prompt_with_lora(prompt: str, lora_name: str | None, lora_strength: float) -> str:
+    if not lora_name:
+        return prompt
+    if f"<lora:{lora_name}:" in prompt:
+        return prompt
+    return f"{prompt} <lora:{lora_name}:{lora_strength:g}>"

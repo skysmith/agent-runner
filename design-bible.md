@@ -6,6 +6,10 @@ this system is built around restraint, clarity, and confidence. it avoids the us
 
 the goal is not to make operations feel flashy. the goal is to make complex information feel readable, grounded, and quietly under control. this design language should support dashboards, finance views, ops tools, admin panels, planning systems, and internal software where good judgment matters more than spectacle.
 
+## related context
+
+- `wiki/life/index.md` / [[wiki/life/index|Life Philosophy]] - connects this design taste to the broader philosophy around calm tools, emotional cost, durable work, and private operating systems.
+
 ---
 
 ## core philosophy

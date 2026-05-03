@@ -192,6 +192,14 @@ Browser-first runtime:
 alcove web
 ```
 
+Private intake route:
+
+```text
+http://127.0.0.1:8000/intake?workspace_id=skyler-intake
+```
+
+The intake route is intentionally an Alcove-local/private surface. It posts to Alcove's existing external-message API and creates one private conversation per request instead of exposing a public queue on a website.
+
 Network-first alias (same HTTP runtime, `0.0.0.0` bind default):
 
 ```bash

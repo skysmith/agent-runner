@@ -8,6 +8,7 @@ from pathlib import Path
 from .conversation_store import build_transcript, synthesize_summary
 from .models import AssistantCapabilityMode, ConversationRecord, ProviderKind, RunMode
 from .prompt_context import load_mind_map, render_mind_map_block
+from .thread_context import render_thread_context_block
 
 DEFAULT_CONTEXT_CHAR_CAP = 12000
 DEFAULT_CODEX_CONTEXT_CHAR_CAP = 100000
@@ -50,6 +51,7 @@ class ContextAssembler:
         current_input: str,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        thread_context: dict[str, object] | None = None,
         configured_context_char_cap: int | None = None,
     ) -> EffectiveContext:
         context_char_cap, _ = self.resolved_context_char_cap(
@@ -65,6 +67,7 @@ class ContextAssembler:
                 run_mode=run_mode,
                 assistant_mode=assistant_mode or conversation.assistant_mode,
                 page_context=page_context if page_context is not None else conversation.page_context,
+                thread_context=thread_context if thread_context is not None else conversation.thread_context,
             ),
             conversation_context=self._conversation_context(
                 conversation,
@@ -84,6 +87,7 @@ class ContextAssembler:
         current_input: str,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        thread_context: dict[str, object] | None = None,
         configured_context_char_cap: int | None = None,
     ) -> EffectiveContext:
         context_char_cap, _ = self.resolved_context_char_cap(
@@ -99,6 +103,7 @@ class ContextAssembler:
                 run_mode=run_mode,
                 assistant_mode=assistant_mode or conversation.assistant_mode,
                 page_context=page_context if page_context is not None else conversation.page_context,
+                thread_context=thread_context if thread_context is not None else conversation.thread_context,
             ),
             conversation_context=self._conversation_context(
                 conversation,
@@ -183,8 +188,10 @@ class ContextAssembler:
         run_mode: RunMode,
         assistant_mode: AssistantCapabilityMode,
         page_context: dict[str, object],
+        thread_context: dict[str, object],
     ) -> str:
         mind_map_block = render_mind_map_block(load_mind_map(repo_path)).strip()
+        thread_context_block = render_thread_context_block(thread_context).strip()
         lines = [
             "WORKSPACE CONTEXT:",
             f"- repo_path: {repo_path}",
@@ -224,6 +231,8 @@ class ContextAssembler:
                     json.dumps(page_context, indent=2, sort_keys=True)[:4000],
                 ]
             )
+        if thread_context_block:
+            lines.extend(["", thread_context_block])
         if mind_map_block:
             lines.extend(["", mind_map_block])
         return "\n".join(lines).strip()

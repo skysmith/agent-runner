@@ -120,6 +120,7 @@ class ConversationStore:
             updated_at=now,
             assistant_mode=AssistantCapabilityMode.ASK,
             page_context={},
+            thread_context={},
             summary=None,
             messages=[],
         )
@@ -354,6 +355,7 @@ class WorkspaceConversationController:
         *,
         assistant_mode: AssistantCapabilityMode | None = None,
         page_context: dict[str, object] | None = None,
+        thread_context: dict[str, object] | None = None,
     ) -> ConversationRecord:
         if conversation_id not in self._records:
             raise KeyError(conversation_id)
@@ -364,6 +366,9 @@ class WorkspaceConversationController:
             changed = True
         if page_context is not None and record.page_context != page_context:
             record.page_context = dict(page_context)
+            changed = True
+        if thread_context is not None and record.thread_context != thread_context:
+            record.thread_context = dict(thread_context)
             changed = True
         if changed:
             record.updated_at = _timestamp_now()
@@ -512,6 +517,7 @@ def _conversation_from_json(raw: dict[str, Any], *, conversation_id: str, worksp
         updated_at=str(raw.get("updated_at") or _timestamp_now()),
         assistant_mode=_assistant_mode_from_raw(raw.get("assistant_mode")),
         page_context=_object_dict(raw.get("page_context")),
+        thread_context=_object_dict(raw.get("thread_context")),
         summary=_optional_text(raw.get("summary")),
         messages=messages,
         archived_at=_optional_text(raw.get("archived_at")),

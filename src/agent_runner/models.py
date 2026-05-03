@@ -133,6 +133,7 @@ class ConversationRecord:
     updated_at: str
     assistant_mode: AssistantCapabilityMode = AssistantCapabilityMode.ASK
     page_context: dict[str, object] = field(default_factory=dict)
+    thread_context: dict[str, object] = field(default_factory=dict)
     summary: str | None = None
     messages: list[ConversationMessage] = field(default_factory=list)
     archived_at: str | None = None

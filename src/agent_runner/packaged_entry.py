@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -521,6 +522,28 @@ def _resolve_arcade_repo(runtime_repo: Path) -> Path | None:
         arcade_repo = resolved_root / "games" / "arcade"
         if arcade_repo.exists() and arcade_repo.is_dir():
             return arcade_repo
+    workspace_repo = _arcade_repo_from_workspace_state(runtime_repo)
+    if workspace_repo is not None:
+        return workspace_repo
+    return None
+
+
+def _arcade_repo_from_workspace_state(runtime_repo: Path) -> Path | None:
+    settings_path = resolve_runtime_paths(repo_path=runtime_repo, artifacts_dir=DEFAULT_ARTIFACTS_DIR).settings_path
+    workspace_state_path = settings_path.parent / "workspaces" / "arcade" / "workspace_state.json"
+    try:
+        raw = json.loads(workspace_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    repo_text = str(raw.get("repo_path") or "").strip()
+    if not repo_text:
+        return None
+    try:
+        repo_path = Path(repo_text).expanduser().resolve()
+    except OSError:
+        return None
+    if repo_path.exists() and repo_path.is_dir():
+        return repo_path
     return None
 
 
@@ -620,14 +643,19 @@ def _open_url_in_chrome_app_mode(url: str) -> None:
     if not url.strip():
         return
     chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    completed = subprocess.run(
-        [chrome_bin, f"--app={url}", "--start-fullscreen"],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    if completed.returncode == 0:
-        return
+    launch_attempts = [
+        ["open", "-na", "Google Chrome", "--args", f"--app={url}", "--start-fullscreen"],
+        [chrome_bin, f"--app={url}", "--start-fullscreen", "--new-window"],
+    ]
+    for args in launch_attempts:
+        completed = subprocess.run(
+            args,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if completed.returncode == 0:
+            return
     _open_url_in_chrome(url)
 
 

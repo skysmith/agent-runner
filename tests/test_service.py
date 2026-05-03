@@ -311,6 +311,89 @@ def test_send_message_normalizes_page_context_before_persisting(tmp_path: Path) 
     assert context["sell_through_window"] == "14d"
 
 
+def test_service_update_context_persists_thread_context(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient())
+    conversation = service.create_conversation("workspace-1")
+    conversation_id = str(conversation["id"])
+
+    updated = service.update_conversation_context(
+        conversation_id,
+        workspace_id="workspace-1",
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+            "summary": "Launching a side project together.",
+            "open_loops": ["Send the preview link"],
+        },
+    )
+
+    assert updated["thread_context"]["channel"] == "sms"
+    assert updated["thread_context"]["thread_key"] == "+14352137423"
+    assert updated["thread_context"]["participant_name"] == "Taylor"
+    assert updated["thread_context"]["open_loops"] == ["Send the preview link"]
+
+
+def test_service_includes_thread_context_in_message_prompt(tmp_path: Path) -> None:
+    client = RecordingPhaseClient(message="On it")
+    service = _make_service(tmp_path, phase_client=client)
+    conversation = service.create_conversation(
+        "workspace-1",
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+            "summary": "Launching a side project together.",
+            "open_loops": ["Send the preview link"],
+        },
+    )
+    conversation_id = str(conversation["id"])
+
+    service.send_message(
+        workspace_id="workspace-1",
+        conversation_id=conversation_id,
+        content="Draft a quick reply",
+        mode=RunMode.MESSAGE,
+    )
+
+    _wait_for(lambda: service.get_run_status()["state"] == "succeeded")
+    prompt = client.requests[0].prompt
+    assert "THREAD CONTEXT:" in prompt
+    assert "- channel: sms" in prompt
+    assert "- participant_name: Taylor" in prompt
+    assert "Send the preview link" in prompt
+
+
+def test_service_delivers_external_messages_into_existing_thread(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Reply ready"))
+
+    first = service.deliver_external_message(
+        workspace_id="workspace-1",
+        content="Hey, did you send the link?",
+        mode=RunMode.MESSAGE,
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+            "open_loops": ["Send the preview link"],
+        },
+    )
+    second = service.deliver_external_message(
+        workspace_id="workspace-1",
+        content="Following up on that preview.",
+        mode=RunMode.MESSAGE,
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+        },
+    )
+
+    assert first["created_conversation"] is True
+    assert second["created_conversation"] is False
+    assert first["conversation_id"] == second["conversation_id"]
+
+
 def test_service_prefers_discovered_multimodal_model_for_screenshot_messages_on_ollama(monkeypatch, tmp_path: Path) -> None:
     client = RecordingPhaseClient(message="Visual review ready")
     service = _make_service(tmp_path, phase_client=client)
@@ -807,7 +890,10 @@ def test_image_studio_queues_image_generation_requests(tmp_path: Path) -> None:
 
     queued_snapshot = service.get_image_workflow_snapshot(str(workspace["id"]))
     assert queued_snapshot["generation_queue"]["active"]["prompt_preview"] == "first queued figurine"
+    assert queued_snapshot["generation_queue"]["active"]["started_at"]
+    assert queued_snapshot["generation_queue"]["active"]["passes"] == 2
     assert queued_snapshot["generation_queue"]["items"][0]["prompt_preview"] == "second queued figurine"
+    assert queued_snapshot["generation_queue"]["items"][0]["started_at"] is None
 
     provider.release.set()
     _wait_for(lambda: len(service.get_image_workflow_snapshot(str(workspace["id"]))["images"]) == 2)
@@ -1057,9 +1143,11 @@ def test_image_studio_auto_refine_retries_and_records_review_metadata(tmp_path: 
 
 
 def test_image_studio_describes_reference_and_uses_small_generation_profiles(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "agent_runner.service.describe_reference_image",
-        lambda **kwargs: {
+    seen_describe_kwargs: dict[str, object] = {}
+
+    def fake_describe_reference(**kwargs):
+        seen_describe_kwargs.update(kwargs)
+        return {
             "source_image_name": kwargs["image_path"].name,
             "vision_model": "qwen3.5:9b",
             "prompt_model": "qwen3.5:9b",
@@ -1079,7 +1167,11 @@ def test_image_studio_describes_reference_and_uses_small_generation_profiles(tmp
             "notes": "Loaded into the generator.",
             "raw_reference_response": "{}",
             "raw_prompt_response": "{}",
-        },
+        }
+
+    monkeypatch.setattr(
+        "agent_runner.service.describe_reference_image",
+        fake_describe_reference,
     )
     service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
     workspace = service.create_studio_workspace(
@@ -1099,6 +1191,8 @@ def test_image_studio_describes_reference_and_uses_small_generation_profiles(tmp
         source_image_id=str(uploaded["selected_image_id"]),
     )
     assert described["reference"]["suggested_prompt"] == "teenage boy in a blue-gray coat standing in a snowy encampment at dusk"
+    assert "preferred_vision_model" in seen_describe_kwargs
+    assert "preferred_prompt_model" in seen_describe_kwargs
 
     generated = service.generate_image_candidates(
         workspace_id=str(workspace["id"]),
@@ -1118,7 +1212,7 @@ def test_image_studio_describes_reference_and_uses_small_generation_profiles(tmp
     assert snapshot["default_generation_profile_id"] == "portrait-768x1024"
     assert snapshot["generation_profiles"][0]["id"] == "portrait-768x1024"
     assert snapshot["default_generation_passes"] == 2
-    assert snapshot["generation_pass_options"] == [2, 4, 8, 12]
+    assert snapshot["generation_pass_options"] == [2, 4, 8, 10, 12, 16, 20]
 
 
 def test_image_studio_passes_requested_step_count_to_provider(tmp_path: Path) -> None:
@@ -1180,11 +1274,12 @@ def test_image_studio_passes_requested_step_count_to_provider(tmp_path: Path) ->
         workspace_id=str(workspace["id"]),
         prompt="Painted explorer figurine",
         count=1,
-        passes=12,
+        passes=20,
     )
 
-    assert provider.requests[0]["passes"] == 12
-    assert generated["images"][0]["metadata"]["steps"] == 12
+    assert provider.requests[0]["passes"] == 20
+    assert generated["images"][0]["metadata"]["steps"] == 20
+    assert isinstance(generated["images"][0]["metadata"]["generation_duration_ms"], int)
 
 
 def test_image_studio_defaults_generation_count_to_one(tmp_path: Path) -> None:

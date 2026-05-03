@@ -24,6 +24,7 @@ from .update_signal import read_build_label
 from .web_ui import (
     render_conversations,
     render_error_page,
+    render_private_intake,
     render_thread,
     render_web_app,
     render_workspaces,
@@ -144,6 +145,7 @@ def create_server(
                                 "workspace_id": conversation.get("workspace_id"),
                                 "assistant_mode": conversation.get("assistant_mode", "ask"),
                                 "page_context": conversation.get("page_context", {}),
+                                "thread_context": conversation.get("thread_context", {}),
                             }
                         )
                         return
@@ -203,6 +205,13 @@ def create_server(
                     return
                 if path == "/":
                     self._html_response(render_web_app())
+                    return
+                if path == "/intake":
+                    self._html_response(
+                        render_private_intake(
+                            default_workspace_id=_query_text(query, "workspace_id") or "skyler-intake"
+                        )
+                    )
                     return
                 if path.startswith("/studio/preview/"):
                     workspace_id = _path_part(path, 2)
@@ -310,10 +319,26 @@ def create_server(
                             auto_refine=_body_object(body, "auto_refine"),
                             size_profile_id=_body_text(body, "size_profile_id"),
                             passes=int(body.get("passes") or 0) or None,
+                            lora_name=_body_text(body, "lora_name"),
+                            lora_strength=body.get("lora_strength"),
                             composition_source_image_id=_body_text(body, "composition_source_image_id"),
                             remix_mode=_body_text(body, "remix_mode"),
                         ),
                         status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path.startswith("/api/workspaces/") and path.endswith("/image-workflow/library-folder"):
+                    body = self._json_body()
+                    workspace_id = _path_part(path, 2)
+                    if not self._is_loopback_client():
+                        self._error_response(HTTPStatus.FORBIDDEN, "Local image library folders are only available from this machine.")
+                        return
+                    self._json_response(
+                        service.set_image_library_folder(
+                            workspace_id=workspace_id,
+                            folder_path=_required_body_text(body, "folder_path"),
+                        ),
+                        status=HTTPStatus.OK,
                     )
                     return
                 if path.startswith("/api/workspaces/") and path.endswith("/image-workflow/open-folder"):
@@ -417,7 +442,11 @@ def create_server(
                     body = self._json_body()
                     workspace_id = _path_part(path, 2)
                     self._json_response(
-                        service.create_conversation(workspace_id, title=_body_text(body, "title")),
+                        service.create_conversation(
+                            workspace_id,
+                            title=_body_text(body, "title"),
+                            thread_context=_body_object(body, "thread_context"),
+                        ),
                         status=HTTPStatus.CREATED,
                     )
                     return
@@ -443,7 +472,22 @@ def create_server(
                             mode=RunMode(_body_text(request_payload, "mode") or "message"),
                             assistant_mode=_body_assistant_mode(request_payload),
                             page_context=_body_object(request_payload, "page_context"),
+                            thread_context=_body_object(request_payload, "thread_context"),
                         )
+                    )
+                    return
+                if path == "/api/external/messages":
+                    body = self._json_body()
+                    self._json_response(
+                        service.deliver_external_message(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            content=_required_body_text(body, "content"),
+                            thread_context=_body_object(body, "thread_context") or {},
+                            mode=RunMode(_body_text(body, "mode") or "message"),
+                            assistant_mode=_body_assistant_mode(body),
+                            page_context=_body_object(body, "page_context"),
+                        ),
+                        status=HTTPStatus.ACCEPTED,
                     )
                     return
                 if path.startswith("/api/conversations/") and path.endswith("/clear"):
@@ -561,6 +605,7 @@ def create_server(
                                 workspace_id=_body_text(body, "workspace_id"),
                                 assistant_mode=_body_assistant_mode(body),
                                 page_context=_body_object(body, "page_context"),
+                                thread_context=_body_object(body, "thread_context"),
                             )
                         )
                         return
@@ -647,6 +692,7 @@ def create_server(
                 "assistant_mode": self._multipart_text(fields, "assistant_mode"),
                 "content": self._multipart_text(fields, "content"),
                 "page_context": self._multipart_json_object(fields, "page_context"),
+                "thread_context": self._multipart_json_object(fields, "thread_context"),
             }
             attachment_lines = self._store_uploaded_images(
                 files,

@@ -94,3 +94,38 @@ def test_codex_context_metrics_use_larger_default_budget() -> None:
     assert metrics["context_char_cap"] == 100000
     assert metrics["cap_source"] == "provider-default"
     assert metrics["summary_active"] is False
+
+
+def test_thread_context_is_rendered_into_system_context(tmp_path: Path) -> None:
+    assembler = ContextAssembler(context_char_cap=500)
+    conversation = ConversationRecord(
+        id="conv-1",
+        workspace_id="workspace-1",
+        title="Taylor",
+        created_at="2026-04-04T12:00:00-06:00",
+        updated_at="2026-04-04T12:00:00-06:00",
+        thread_context={
+            "channel": "sms",
+            "thread_key": "+14352137423",
+            "participant_name": "Taylor",
+            "relationship": "friend",
+            "summary": "Launching a side project together.",
+            "open_loops": ["Send the preview link"],
+        },
+        messages=[_message(1, "user", "hello")],
+    )
+
+    context = assembler.build_for_message(
+        repo_path=tmp_path,
+        provider=ProviderKind.CODEX,
+        model="gpt-5.4",
+        run_mode=RunMode.MESSAGE,
+        conversation=conversation,
+        current_input="reply to Taylor",
+    )
+
+    assert "THREAD CONTEXT:" in context.system_context
+    assert "- channel: sms" in context.system_context
+    assert "- participant_name: Taylor" in context.system_context
+    assert "- relationship: friend" in context.system_context
+    assert "Send the preview link" in context.system_context

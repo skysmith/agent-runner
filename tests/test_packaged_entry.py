@@ -323,6 +323,50 @@ def test_open_arcade_url_in_chrome_uses_app_mode_and_fullscreen(monkeypatch) -> 
     assert app_opened == ["https://alcove.example/play/arcade/index.html"]
 
 
+def test_open_url_in_chrome_app_mode_prefers_open_new_instance(monkeypatch) -> None:
+    invocations: list[list[str]] = []
+    fallback_opened: list[str] = []
+
+    def fake_run(args, **kwargs):
+        invocations.append(list(args))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(packaged_entry.subprocess, "run", fake_run)
+    monkeypatch.setattr(packaged_entry, "_open_url_in_chrome", lambda url: fallback_opened.append(url))
+
+    packaged_entry._open_url_in_chrome_app_mode("https://alcove.example/play/arcade/index.html")
+
+    assert invocations == [
+        ["open", "-na", "Google Chrome", "--args", "--app=https://alcove.example/play/arcade/index.html", "--start-fullscreen"]
+    ]
+    assert fallback_opened == []
+
+
+def test_open_url_in_chrome_app_mode_falls_back_after_failed_launches(monkeypatch) -> None:
+    invocations: list[list[str]] = []
+    fallback_opened: list[str] = []
+
+    def fake_run(args, **kwargs):
+        invocations.append(list(args))
+        return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="launch failed")
+
+    monkeypatch.setattr(packaged_entry.subprocess, "run", fake_run)
+    monkeypatch.setattr(packaged_entry, "_open_url_in_chrome", lambda url: fallback_opened.append(url))
+
+    packaged_entry._open_url_in_chrome_app_mode("https://alcove.example/play/arcade/index.html")
+
+    assert invocations == [
+        ["open", "-na", "Google Chrome", "--args", "--app=https://alcove.example/play/arcade/index.html", "--start-fullscreen"],
+        [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "--app=https://alcove.example/play/arcade/index.html",
+            "--start-fullscreen",
+            "--new-window",
+        ],
+    ]
+    assert fallback_opened == ["https://alcove.example/play/arcade/index.html"]
+
+
 def test_resolve_arcade_repo_searches_parent_roots(tmp_path: Path) -> None:
     runtime_repo = tmp_path / "lab" / "scratchpad" / "agent-runner-fresh-onboarding"
     runtime_repo.mkdir(parents=True)
@@ -345,6 +389,42 @@ def test_resolve_arcade_repo_prefers_configured_path(monkeypatch, tmp_path: Path
     resolved = packaged_entry._resolve_arcade_repo(runtime_repo)
 
     assert resolved == configured_arcade
+
+
+def test_resolve_arcade_repo_falls_back_to_workspace_state_repo(tmp_path: Path) -> None:
+    runtime_repo = tmp_path / "alcove"
+    runtime_repo.mkdir()
+    arcade_repo = tmp_path / "lab" / "games" / "arcade"
+    arcade_repo.mkdir(parents=True)
+    workspace_state = runtime_repo / ".agent-runner" / "workspaces" / "arcade"
+    workspace_state.mkdir(parents=True)
+    (workspace_state / "workspace_state.json").write_text(
+        (
+            "{\n"
+            f'  "repo_path": "{arcade_repo}"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = packaged_entry._resolve_arcade_repo(runtime_repo)
+
+    assert resolved == arcade_repo
+
+
+def test_resolve_arcade_repo_ignores_missing_workspace_state_repo(tmp_path: Path) -> None:
+    runtime_repo = tmp_path / "alcove"
+    runtime_repo.mkdir()
+    workspace_state = runtime_repo / ".agent-runner" / "workspaces" / "arcade"
+    workspace_state.mkdir(parents=True)
+    (workspace_state / "workspace_state.json").write_text(
+        '{\n  "repo_path": "/tmp/does-not-exist"\n}\n',
+        encoding="utf-8",
+    )
+
+    resolved = packaged_entry._resolve_arcade_repo(runtime_repo)
+
+    assert resolved is None
 
 
 def test_publish_urls_prefer_local_for_open_and_phone_for_copy() -> None:

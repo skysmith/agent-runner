@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import inspect
 import importlib.util
 import json
@@ -78,7 +79,7 @@ DEFAULT_IMAGE_GENERATION_SIZE_PROFILE_ID = "portrait-768x1024"
 IMAGE_GENERATION_COUNT_OPTIONS = (1, 2, 3, 4)
 MAX_IMAGE_GENERATION_COUNT = 6
 DEFAULT_IMAGE_GENERATION_COUNT = 1
-IMAGE_GENERATION_PASS_OPTIONS = (2, 4, 8, 12)
+IMAGE_GENERATION_PASS_OPTIONS = (2, 4, 8, 10, 12, 16, 20)
 DEFAULT_IMAGE_GENERATION_PASSES = 2
 IMAGE_REUSE_MODES = ("match", "remix")
 DEFAULT_IMAGE_REUSE_MODE = "match"
@@ -185,6 +186,7 @@ class ZImageLocalRuntimeConfig:
     offload_to_cpu: bool = True
     keep_clip_on_cpu: bool = True
     diffusion_flash_attn: bool = True
+    timeout_seconds: int | None = None
     extra_args: tuple[str, ...] = ()
     source_config_path: Path | None = None
 
@@ -208,6 +210,27 @@ def image_generation_pass_options() -> list[int]:
 
 def image_generation_count_options() -> list[int]:
     return [int(value) for value in IMAGE_GENERATION_COUNT_OPTIONS]
+
+
+def zimage_lora_options() -> list[dict[str, object]]:
+    runtime_config = discover_zimage_local_runtime_config()
+    if runtime_config is None:
+        return []
+    lora_dir = _lora_model_dir_from_args(runtime_config.extra_args)
+    if lora_dir is None or not lora_dir.exists() or not lora_dir.is_dir():
+        return []
+    options: list[dict[str, object]] = []
+    for path in sorted(lora_dir.glob("*.safetensors"), key=lambda item: item.stem.lower()):
+        options.append(
+            {
+                "name": path.stem,
+                "label": _lora_label(path.stem),
+                "file_name": path.name,
+                "path": str(path),
+                "byte_size": path.stat().st_size,
+            }
+        )
+    return options
 
 
 def normalize_image_generation_count(value: object | None) -> int:
@@ -1098,6 +1121,7 @@ class ZImageLocalWorkflowProvider:
                     init_image_path=init_image_path,
                     strength=resolved_strength,
                 )
+                started_at = time.perf_counter()
                 try:
                     completed = subprocess.run(
                         cmd,
@@ -1105,11 +1129,12 @@ class ZImageLocalWorkflowProvider:
                         capture_output=True,
                         text=True,
                         check=False,
-                        timeout=900,
+                        timeout=runtime_config.timeout_seconds,
                     )
                 except subprocess.TimeoutExpired as exc:
+                    timeout_seconds = runtime_config.timeout_seconds
                     raise RuntimeError(
-                        f"Z-Image local generation timed out for candidate {candidate_number} after 900s: "
+                        f"Z-Image local generation timed out for candidate {candidate_number} after {timeout_seconds}s: "
                         f"{_summarize_process_error(exc.stderr or '', exc.stdout or '')}"
                     ) from exc
                 if completed.returncode != 0:
@@ -1119,6 +1144,7 @@ class ZImageLocalWorkflowProvider:
                     )
                 if not output_path.exists():
                     raise RuntimeError(f"Z-Image local generation did not produce {output_path.name}.")
+                duration_ms = int((time.perf_counter() - started_at) * 1000)
                 candidates.append(
                     GeneratedImageCandidate(
                         label=f"Candidate {candidate_number}",
@@ -1135,8 +1161,14 @@ class ZImageLocalWorkflowProvider:
                             "width": runtime_config.width,
                             "height": runtime_config.height,
                             "steps": runtime_config.steps,
+                            "generation_duration_ms": duration_ms,
                             "cfg_scale": runtime_config.cfg_scale,
                             "sampling_method": runtime_config.sampling_method,
+                            "binary_path": str(runtime_config.binary_path),
+                            "offload_to_cpu": runtime_config.offload_to_cpu,
+                            "keep_clip_on_cpu": runtime_config.keep_clip_on_cpu,
+                            "diffusion_flash_attn": runtime_config.diffusion_flash_attn,
+                            "extra_args": list(runtime_config.extra_args),
                             "size_profile_id": str(size_profile["id"]),
                             "aspect_ratio": str(size_profile["aspect_ratio"]),
                             "generation_mode": resolved_reuse_mode,
@@ -1252,6 +1284,8 @@ class ImageWorkflowStore:
     def __init__(self, workspace_dir: Path, *, asset_export_root: Path | None = None):
         self.workspace_dir = workspace_dir
         self.root = workspace_dir / "image-workflow"
+        self.library_config_path = self.root / "library.json"
+        self._library_folder = self._configured_library_folder()
         self.asset_export_root = asset_export_root.resolve() if asset_export_root is not None else None
         self.manifest_path = self.root / "manifest.json"
         self.assets_dir = self._prepare_assets_dir()
@@ -1262,6 +1296,7 @@ class ImageWorkflowStore:
     def list_assets(self) -> list[ImageAssetRecord]:
         manifest = self._load_manifest()
         manifest = self._reconcile_missing_assets(manifest)
+        manifest = self._index_library_folder_assets(manifest)
         return [self._asset_from_raw(item) for item in manifest.get("assets", [])]
 
     def list_jobs(self, *, job_type: str | None = None) -> list[ImageWorkflowJobRecord]:
@@ -1575,9 +1610,33 @@ class ImageWorkflowStore:
         jobs = [self._job_to_raw(item) for item in self.list_jobs()]
         return {
             "selected_image_id": self.selected_image_id(),
+            "library_folder_path": str(self.current_library_folder()),
             "assets": assets,
             "jobs": jobs,
         }
+
+    def current_library_folder(self) -> Path:
+        if self.assets_dir.is_symlink():
+            return self.assets_dir.resolve()
+        return self.assets_dir
+
+    def set_library_folder(self, folder_path: Path) -> Path:
+        target = Path(folder_path).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.library_config_path.write_text(
+            json.dumps({"folder_path": str(target)}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        self._library_folder = target
+        self.assets_dir = self._prepare_assets_dir()
+        manifest = self._load_manifest()
+        manifest["assets"] = []
+        manifest["jobs"] = []
+        manifest["selected_image_id"] = None
+        self._save_manifest(manifest)
+        self._index_library_folder_assets(self._load_manifest())
+        return self.current_library_folder()
 
     def _migrate_assets_to_flat_layout(self) -> None:
         try:
@@ -1721,6 +1780,57 @@ class ImageWorkflowStore:
             self._delete_job_output_dir(job)
         return manifest
 
+    def _index_library_folder_assets(self, manifest: dict[str, object]) -> dict[str, object]:
+        try:
+            assets_root = self.current_library_folder()
+        except OSError:
+            return manifest
+        if not assets_root.exists() or not assets_root.is_dir():
+            return manifest
+        raw_assets = list(manifest.get("assets", []))
+        known_paths = {
+            str(raw.get("relative_path") or "")
+            for raw in raw_assets
+            if isinstance(raw, dict)
+        }
+        added: list[dict[str, object]] = []
+        for child in sorted(assets_root.iterdir(), key=lambda item: item.name.lower()):
+            if not child.is_file() or not _is_supported_image_file(child):
+                continue
+            relative_path = f"image-workflow/assets/{child.name}"
+            if relative_path in known_paths:
+                continue
+            stat = child.stat()
+            timestamp = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds")
+            asset_id = f"img_lib_{hashlib.sha1(str(child.resolve()).encode('utf-8')).hexdigest()[:12]}"
+            added.append(
+                self._asset_to_raw(
+                    ImageAssetRecord(
+                        id=asset_id,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                        label=child.stem,
+                        source="upload",
+                        mime_type=_mime_type_for_image_file(child),
+                        file_name=child.name,
+                        relative_path=relative_path,
+                        metadata={
+                            "original_file_name": child.name,
+                            "byte_size": stat.st_size,
+                            "library_folder_path": str(assets_root),
+                            "library_indexed": True,
+                        },
+                    )
+                )
+            )
+        if not added:
+            return manifest
+        manifest["assets"] = [*added, *raw_assets]
+        if not str(manifest.get("selected_image_id") or "").strip():
+            manifest["selected_image_id"] = self._asset_from_raw(added[0]).id
+        self._save_manifest(manifest)
+        return manifest
+
     def _asset_file_exists(self, asset: ImageAssetRecord) -> bool:
         try:
             asset_path = self.asset_path(asset)
@@ -1730,7 +1840,7 @@ class ImageWorkflowStore:
 
     def _prepare_assets_dir(self) -> Path:
         local_assets_dir = self.root / "assets"
-        export_root = self.asset_export_root
+        export_root = self._library_folder or self.asset_export_root
         if export_root is None:
             return local_assets_dir
         export_assets_dir = export_root
@@ -1740,7 +1850,7 @@ class ImageWorkflowStore:
             if local_assets_dir.is_symlink():
                 current_target = local_assets_dir.resolve()
                 if current_target != export_assets_dir.resolve():
-                    if current_target.exists() and current_target.is_dir() and any(current_target.iterdir()):
+                    if self._library_folder is None and current_target.exists() and current_target.is_dir() and any(current_target.iterdir()):
                         shutil.copytree(current_target, export_assets_dir, dirs_exist_ok=True)
                     local_assets_dir.unlink()
                     local_assets_dir.symlink_to(export_assets_dir, target_is_directory=True)
@@ -1755,6 +1865,18 @@ class ImageWorkflowStore:
             return local_assets_dir
         except OSError:
             return local_assets_dir
+
+    def _configured_library_folder(self) -> Path | None:
+        try:
+            raw = json.loads(self.library_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        folder_text = str(raw.get("folder_path") or "").strip()
+        if not folder_text:
+            return None
+        return Path(folder_text).expanduser().resolve()
 
     def _load_manifest(self) -> dict[str, object]:
         if not self.manifest_path.exists():
@@ -2398,16 +2520,26 @@ def describe_reference_image(
     image_path: Path,
     ollama_host: str,
     prompt_context: str | None = None,
+    preferred_vision_model: str | None = None,
+    preferred_prompt_model: str | None = None,
 ) -> dict[str, object]:
     installed = list_local_ollama_models()
-    vision_model = pick_first_available_model(
+    vision_preferences = _model_preferences(
+        preferred_vision_model,
         ("qwen3.5:9b", "qwen3.5:9b-q4_K_M", "llava:latest", "llava"),
+    )
+    vision_model = pick_first_available_model(
+        vision_preferences,
         installed,
     )
     if not vision_model:
         raise RuntimeError("Describe Reference needs a local Ollama vision model such as qwen3.5:9b.")
-    prompt_model = pick_first_available_model(
+    prompt_preferences = _model_preferences(
+        preferred_prompt_model,
         ("qwen3.5:9b", "qwen3.5:9b-q4_K_M", "llama3.2:3b", "gemma4:e4b"),
+    )
+    prompt_model = pick_first_available_model(
+        prompt_preferences,
         installed,
     )
     reference_prompt = textwrap.dedent(
@@ -2551,6 +2683,7 @@ def _runtime_config_from_env() -> ZImageLocalRuntimeConfig | None:
         offload_to_cpu=_env_flag("ALCOVE_ZIMAGE_OFFLOAD_TO_CPU", default=True),
         keep_clip_on_cpu=_env_flag("ALCOVE_ZIMAGE_KEEP_CLIP_ON_CPU", default=True),
         diffusion_flash_attn=_env_flag("ALCOVE_ZIMAGE_DIFFUSION_FA", default=True),
+        timeout_seconds=_optional_bounded_int(os.environ.get("ALCOVE_ZIMAGE_TIMEOUT_SECONDS"), minimum=60),
         extra_args=tuple(_split_args(os.environ.get("ALCOVE_ZIMAGE_EXTRA_ARGS", ""))),
         source_config_path=None,
     )
@@ -2605,6 +2738,7 @@ def _runtime_config_from_generation_file(path: Path) -> ZImageLocalRuntimeConfig
         offload_to_cpu=bool(zimage_local.get("offload_to_cpu", True)),
         keep_clip_on_cpu=bool(zimage_local.get("keep_clip_on_cpu", zimage_local.get("offload_to_cpu", True))),
         diffusion_flash_attn=bool(zimage_local.get("diffusion_flash_attn", True)),
+        timeout_seconds=_optional_bounded_int(zimage_local.get("timeout_seconds"), minimum=60),
         extra_args=tuple(_split_args(zimage_local.get("extra_args", []))),
         source_config_path=path,
     )
@@ -2624,6 +2758,7 @@ def _validated_runtime_config(
     offload_to_cpu: bool,
     keep_clip_on_cpu: bool,
     diffusion_flash_attn: bool,
+    timeout_seconds: int | None,
     extra_args: tuple[str, ...],
     source_config_path: Path | None,
 ) -> ZImageLocalRuntimeConfig | None:
@@ -2651,6 +2786,7 @@ def _validated_runtime_config(
         offload_to_cpu=offload_to_cpu,
         keep_clip_on_cpu=keep_clip_on_cpu,
         diffusion_flash_attn=diffusion_flash_attn,
+        timeout_seconds=timeout_seconds,
         extra_args=extra_args,
         source_config_path=source_config_path,
     )
@@ -2823,6 +2959,41 @@ def _suffix_for_mime(mime_type: str) -> str:
     if normalized == "image/svg+xml":
         return ".svg"
     return ".bin"
+
+
+def _is_supported_image_file(path: Path) -> bool:
+    return path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
+
+
+def _mime_type_for_image_file(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    if suffix == ".bmp":
+        return "image/bmp"
+    if suffix == ".svg":
+        return "image/svg+xml"
+    return "application/octet-stream"
+
+
+def _lora_model_dir_from_args(extra_args: tuple[str, ...]) -> Path | None:
+    for index, value in enumerate(extra_args):
+        if value == "--lora-model-dir" and index + 1 < len(extra_args):
+            return Path(extra_args[index + 1]).expanduser()
+    return None
+
+
+def _lora_label(name: str) -> str:
+    label = re.sub(r"^zimage_", "", name)
+    label = re.sub(r"_v\d+(_onetrainer)?$", "", label)
+    label = label.replace("_", " ").replace("-", " ")
+    return " ".join(part.capitalize() for part in label.split()) or name
 
 
 def _fallback_reference_prompt(reference: dict[str, object]) -> str:
@@ -3034,6 +3205,13 @@ def pick_first_available_model(preferred: tuple[str, ...], installed: set[str]) 
     return None
 
 
+def _model_preferences(preferred: str | None, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    preferred_text = str(preferred or "").strip()
+    if not preferred_text:
+        return fallback
+    return (preferred_text, *(item for item in fallback if item != preferred_text))
+
+
 def write_candidate_temp_image(candidate: GeneratedImageCandidate) -> Path:
     suffix = Path(candidate.file.file_name).suffix or _suffix_for_mime(candidate.file.mime_type)
     if suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -3177,6 +3355,17 @@ def _bounded_int(value: object, *, default: int, minimum: int) -> int:
     return max(parsed, minimum)
 
 
+def _optional_bounded_int(value: object, *, minimum: int) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return max(parsed, minimum)
+
+
 def _bounded_float(value: object, *, default: float, minimum: float) -> float:
     try:
         parsed = float(str(value or "").strip())
@@ -3204,8 +3393,18 @@ def _env_flag(name: str, *, default: bool) -> bool:
     return default
 
 
-def _summarize_process_error(stderr: str, stdout: str) -> str:
-    combined = "\n".join(part.strip() for part in (stderr, stdout) if part.strip()).strip()
+def _process_output_text(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def _summarize_process_error(stderr: object, stdout: object) -> str:
+    combined = "\n".join(
+        part.strip()
+        for part in (_process_output_text(stderr), _process_output_text(stdout))
+        if part.strip()
+    ).strip()
     if not combined:
         return "No process output was captured."
     lines = [line.strip() for line in combined.splitlines() if line.strip()]

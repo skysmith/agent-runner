@@ -20,6 +20,8 @@ from agent_runner.image_workflow import (
     UnavailableImageTo3DProvider,
     ZImageLocalRuntimeConfig,
     ZImageLocalWorkflowProvider,
+    describe_reference_image,
+    discover_zimage_local_runtime_config,
     _summarize_process_error,
     default_image_to_3d_provider,
     default_image_to_video_provider,
@@ -98,6 +100,35 @@ def test_pick_first_available_model_does_not_fall_back_to_wrong_qwen35_size() ->
     assert selected is None
 
 
+def test_describe_reference_image_prefers_configured_ollama_models(monkeypatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "reference.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    seen_models: list[str] = []
+    monkeypatch.setattr(
+        "agent_runner.image_workflow.list_local_ollama_models",
+        lambda: {"qwen3.5:9b", "llava:latest", "llama3.2:3b"},
+    )
+
+    def fake_generate(*, model, image_paths, **kwargs):
+        seen_models.append(model)
+        if image_paths:
+            return '{"subject":"woman","scene":"studio","composition":"portrait","palette":"warm","lighting":"soft","style":"realistic","mood":"calm","important_details":["robe"],"recreation_prompt":"warm studio portrait"}'
+        return '{"generation_prompt":"warm studio portrait, clean background","notes":"ok"}'
+
+    monkeypatch.setattr("agent_runner.image_workflow.ollama_generate", fake_generate)
+
+    result = describe_reference_image(
+        image_path=image_path,
+        ollama_host="http://127.0.0.1:11434",
+        preferred_vision_model="llava:latest",
+        preferred_prompt_model="llama3.2:3b",
+    )
+
+    assert result["vision_model"] == "llava:latest"
+    assert result["prompt_model"] == "llama3.2:3b"
+    assert seen_models == ["llava:latest", "llama3.2:3b"]
+
+
 def test_zimage_build_command_keeps_conditioner_on_cpu_when_configured(tmp_path: Path) -> None:
     provider = ZImageLocalWorkflowProvider(
         ZImageLocalRuntimeConfig(
@@ -140,6 +171,86 @@ def test_zimage_build_command_can_leave_conditioner_on_accelerator(tmp_path: Pat
     assert "--clip-on-cpu" not in cmd
 
 
+def test_zimage_generate_uses_configured_timeout(monkeypatch, tmp_path: Path) -> None:
+    provider = ZImageLocalWorkflowProvider(
+        ZImageLocalRuntimeConfig(
+            binary_path=tmp_path / "sd-cli",
+            diffusion_model=tmp_path / "model.gguf",
+            text_encoder=tmp_path / "encoder.gguf",
+            vae=tmp_path / "vae.safetensors",
+            timeout_seconds=1234,
+        )
+    )
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, *, cwd, capture_output, text, check, timeout):
+        seen["timeout"] = timeout
+        Path(cwd, "candidate-1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        class Completed:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("agent_runner.image_workflow.subprocess.run", fake_run)
+
+    candidates = provider.generate_images(prompt="astronaut figurine", count=1, passes=2)
+
+    assert seen["timeout"] == 1234
+    assert candidates[0].metadata["steps"] == 2
+    assert isinstance(candidates[0].metadata["generation_duration_ms"], int)
+
+
+def test_zimage_generate_has_no_timeout_by_default(monkeypatch, tmp_path: Path) -> None:
+    provider = ZImageLocalWorkflowProvider(
+        ZImageLocalRuntimeConfig(
+            binary_path=tmp_path / "sd-cli",
+            diffusion_model=tmp_path / "model.gguf",
+            text_encoder=tmp_path / "encoder.gguf",
+            vae=tmp_path / "vae.safetensors",
+        )
+    )
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, *, cwd, capture_output, text, check, timeout):
+        seen["timeout"] = timeout
+        Path(cwd, "candidate-1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        class Completed:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("agent_runner.image_workflow.subprocess.run", fake_run)
+
+    provider.generate_images(prompt="astronaut figurine", count=1, passes=12)
+
+    assert seen["timeout"] is None
+
+
+def test_zimage_runtime_config_reads_timeout_from_env(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "sd-cli"
+    diffusion = tmp_path / "model.gguf"
+    encoder = tmp_path / "encoder.gguf"
+    vae = tmp_path / "vae.safetensors"
+    for path in (binary, diffusion, encoder, vae):
+        path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("ALCOVE_ZIMAGE_BINARY", str(binary))
+    monkeypatch.setenv("ALCOVE_ZIMAGE_DIFFUSION_MODEL", str(diffusion))
+    monkeypatch.setenv("ALCOVE_ZIMAGE_TEXT_ENCODER", str(encoder))
+    monkeypatch.setenv("ALCOVE_ZIMAGE_VAE", str(vae))
+    monkeypatch.setenv("ALCOVE_ZIMAGE_TIMEOUT_SECONDS", "2400")
+
+    config = discover_zimage_local_runtime_config()
+
+    assert config is not None
+    assert config.timeout_seconds == 2400
+
+
 def test_summarize_process_error_calls_out_metal_oom() -> None:
     summary = _summarize_process_error(
         "[INFO ] ggml_extend.hpp:1921 - qwen3 offload params (3555.38 MB, 398 tensors) to runtime backend (Metal), taking 39.65s\n"
@@ -156,6 +267,15 @@ def test_summarize_process_error_preserves_recent_lines_for_generic_failures() -
     summary = _summarize_process_error(
         "line1\nline2\nline3\nline4\nline5\n",
         "line6\n",
+    )
+
+    assert summary == "line3 | line4 | line5 | line6"
+
+
+def test_summarize_process_error_accepts_timeout_bytes() -> None:
+    summary = _summarize_process_error(
+        b"line1\nline2\nline3\nline4\nline5\n",
+        b"line6\n",
     )
 
     assert summary == "line3 | line4 | line5 | line6"

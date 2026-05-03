@@ -77,6 +77,57 @@ def test_api_lists_workspaces_and_posts_message(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_api_external_message_upserts_thread_context_conversation(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        first = _post_json(
+            f"{base}/api/external/messages",
+            {
+                "workspace_id": "workspace-1",
+                "content": "Hey, did you send the link?",
+                "mode": "message",
+                "thread_context": {
+                    "channel": "sms",
+                    "thread_key": "+14352137423",
+                    "participant_name": "Taylor",
+                    "open_loops": ["Send the preview link"],
+                },
+            },
+            expected_status=202,
+        )
+        second = _post_json(
+            f"{base}/api/external/messages",
+            {
+                "workspace_id": "workspace-1",
+                "content": "Following up on that preview.",
+                "mode": "message",
+                "thread_context": {
+                    "channel": "sms",
+                    "thread_key": "+14352137423",
+                    "participant_name": "Taylor",
+                },
+            },
+            expected_status=202,
+        )
+
+        assert first["created_conversation"] is True
+        assert second["created_conversation"] is False
+        assert first["conversation_id"] == second["conversation_id"]
+        conversation = _get_json(
+            f"{base}/api/conversations/{first['conversation_id']}?workspace_id=workspace-1"
+        )
+        assert conversation["thread_context"]["channel"] == "sms"
+        assert conversation["thread_context"]["participant_name"] == "Taylor"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_mobile_routes_render(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     service = _make_service(tmp_path)
@@ -115,6 +166,25 @@ def test_root_route_renders_desktop_web_app(tmp_path: Path) -> None:
         assert "function copyStudioWorkspaceLink" in response
         assert "Current Project" in response
         assert "Copy Phone Game Link" in response
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_private_intake_route_renders_alcove_delivery_form(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        response = urllib.request.urlopen(
+            f"{base}/intake?workspace_id=skyler-intake"
+        ).read().decode("utf-8")
+        assert "Private Intake" in response
+        assert "Send to Alcove" in response
+        assert "/api/external/messages" in response
+        assert "skyler-intake" in response
     finally:
         server.shutdown()
         server.server_close()
@@ -159,14 +229,14 @@ def test_image_workflow_endpoints_generate_upload_and_serve_artifacts(tmp_path: 
 
         generated = _post_json(
             f"{base}/api/workspaces/{workspace_id}/image-workflow/generate",
-            {"prompt": "A toy robot figurine", "count": 2, "passes": 12},
+            {"prompt": "A toy robot figurine", "count": 2, "passes": 20},
         )
         assert generated["accepted"] is True
         _wait_for(lambda: len(_get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")["images"]) == 2)
         generated_workflow = _get_json(f"{base}/api/workspaces/{workspace_id}/image-workflow")
         assert generated_workflow["generation_count_options"] == [1, 2, 3, 4]
         assert generated_workflow["default_generation_count"] == 1
-        assert generated_workflow["generation_pass_options"] == [2, 4, 8, 12]
+        assert generated_workflow["generation_pass_options"] == [2, 4, 8, 10, 12, 16, 20]
         assert generated_workflow["default_generation_passes"] == 2
         image_url = generated_workflow["images"][0]["url"]
         assert image_url.startswith(f"/workspace-media/{workspace_id}/")
@@ -1265,7 +1335,7 @@ def _get_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _post_json(url: str, payload: dict) -> dict:
+def _post_json(url: str, payload: dict, *, expected_status: int | None = None) -> dict:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -1273,6 +1343,8 @@ def _post_json(url: str, payload: dict) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(request) as response:
+        if expected_status is not None:
+            assert response.status == expected_status
         return json.loads(response.read().decode("utf-8"))
 
 

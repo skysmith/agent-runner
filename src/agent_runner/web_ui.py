@@ -11,6 +11,300 @@ _LOCKED_VIEWPORT = (
 )
 
 
+def render_private_intake(default_workspace_id: str = "skyler-intake") -> str:
+    workspace = escape((default_workspace_id or "skyler-intake").strip() or "skyler-intake")
+    return f"""
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="{_LOCKED_VIEWPORT}" />
+        <title>Alcove Private Intake</title>
+        <style>
+          :root {{
+            --bg: #f4f5f7;
+            --panel: #fbfbfc;
+            --ink: #24272c;
+            --muted: #737b86;
+            --line: #d6dae0;
+            --soft: #eef1f4;
+            --accent: #325746;
+            --danger: #a8443c;
+          }}
+          * {{ box-sizing: border-box; }}
+          body {{
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+            color: var(--ink);
+            background: linear-gradient(180deg, #f8f8f6 0%, var(--bg) 100%);
+          }}
+          main {{
+            width: min(960px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 34px 0 56px;
+          }}
+          header {{
+            display: grid;
+            gap: 10px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--line);
+          }}
+          .eyebrow {{
+            margin: 0;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+          }}
+          h1 {{
+            margin: 0;
+            max-width: 12ch;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: clamp(44px, 8vw, 78px);
+            line-height: 0.96;
+            letter-spacing: 0;
+          }}
+          .lede {{
+            max-width: 58ch;
+            margin: 0;
+            color: var(--muted);
+            font-size: 17px;
+            line-height: 1.65;
+          }}
+          form {{
+            display: grid;
+            gap: 18px;
+            margin-top: 24px;
+            padding: 24px;
+            border: 1px solid var(--line);
+            background: rgba(251, 251, 252, 0.92);
+          }}
+          .grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+          }}
+          label {{
+            display: grid;
+            gap: 8px;
+          }}
+          label span {{
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+          }}
+          input,
+          select,
+          textarea {{
+            width: 100%;
+            min-height: 46px;
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            font: inherit;
+            font-size: 16px;
+            padding: 12px 13px;
+          }}
+          textarea {{
+            min-height: 168px;
+            resize: vertical;
+            line-height: 1.55;
+          }}
+          .wide {{
+            grid-column: 1 / -1;
+          }}
+          .actions {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+          }}
+          .status {{
+            min-height: 1.4em;
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.45;
+          }}
+          .status.error {{
+            color: var(--danger);
+          }}
+          button {{
+            min-height: 46px;
+            border: 1px solid #26372f;
+            background: var(--ink);
+            color: #fff;
+            font: inherit;
+            font-weight: 700;
+            padding: 0 18px;
+            cursor: pointer;
+          }}
+          button:disabled {{
+            opacity: 0.62;
+            cursor: wait;
+          }}
+          .open-link {{
+            color: var(--accent);
+            font-weight: 700;
+          }}
+          @media (max-width: 680px) {{
+            main {{
+              width: min(100vw - 22px, 960px);
+              padding-top: 20px;
+            }}
+            form {{
+              padding: 16px;
+            }}
+            .grid {{
+              grid-template-columns: 1fr;
+            }}
+          }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <header>
+            <p class="eyebrow">Private Intake</p>
+            <h1>Route it through Alcove.</h1>
+            <p class="lede">
+              This form creates a private Alcove conversation instead of publishing an intake queue on the public site.
+            </p>
+          </header>
+
+          <form id="intake-form">
+            <div class="grid">
+              <label>
+                <span>Workspace</span>
+                <input id="workspace" value="{workspace}" required />
+              </label>
+              <label>
+                <span>Channel</span>
+                <input id="channel" value="Private note" />
+              </label>
+              <label>
+                <span>From</span>
+                <input id="sender" maxlength="80" placeholder="Name or source" required />
+              </label>
+              <label>
+                <span>Priority</span>
+                <select id="priority">
+                  <option value="normal" selected>Normal</option>
+                  <option value="low">Low</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label class="wide">
+                <span>Subject</span>
+                <input id="subject" maxlength="140" placeholder="Short request title" required />
+              </label>
+              <label class="wide">
+                <span>Message</span>
+                <textarea id="body" placeholder="What needs attention, and what would success look like?" required></textarea>
+              </label>
+            </div>
+            <div class="actions">
+              <p id="status" class="status">Ready to create a private Alcove thread.</p>
+              <button id="submit-button" type="submit">Send to Alcove</button>
+            </div>
+          </form>
+        </main>
+
+        <script>
+          const form = document.getElementById('intake-form');
+          const statusNode = document.getElementById('status');
+          const submitButton = document.getElementById('submit-button');
+
+          function value(id) {{
+            return String(document.getElementById(id)?.value || '').trim();
+          }}
+
+          function slug(value) {{
+            return String(value || 'request')
+              .toLowerCase()
+              .replace(/[^a-z0-9._-]+/g, '-')
+              .replace(/^-+|-+$/g, '')
+              .slice(0, 48) || 'request';
+          }}
+
+          function setStatus(message, isError = false) {{
+            statusNode.classList.toggle('error', isError);
+            statusNode.innerHTML = message;
+          }}
+
+          form.addEventListener('submit', async (event) => {{
+            event.preventDefault();
+            submitButton.disabled = true;
+            setStatus('Creating private Alcove thread...');
+
+            const workspaceId = value('workspace') || 'skyler-intake';
+            const sender = value('sender');
+            const channel = value('channel') || 'Private note';
+            const subject = value('subject');
+            const priority = value('priority') || 'normal';
+            const body = value('body');
+            const stamp = new Date().toISOString();
+            const threadKey = `private-intake:${{stamp}}:${{Math.random().toString(36).slice(2, 8)}}:${{slug(subject)}}`;
+            const content = [
+              `Private intake request`,
+              ``,
+              `From: ${{sender}}`,
+              `Channel: ${{channel}}`,
+              `Subject: ${{subject}}`,
+              `Priority: ${{priority}}`,
+              ``,
+              body,
+            ].join('\\n');
+
+            try {{
+              const response = await fetch('/api/external/messages', {{
+                method: 'POST',
+                headers: {{ 'content-type': 'application/json' }},
+                body: JSON.stringify({{
+                  workspace_id: workspaceId,
+                  content,
+                  mode: 'message',
+                  thread_context: {{
+                    channel: 'private-intake',
+                    thread_key: threadKey,
+                    participant_name: `${{subject}} - ${{sender}}`,
+                    participant_handle: channel,
+                    relationship: 'private Alcove intake',
+                    goal: subject,
+                    summary: body,
+                    open_loops: [`Priority: ${{priority}}`],
+                    reply_style: ['Keep this request private inside Alcove.'],
+                  }},
+                }}),
+              }});
+              const payload = await response.json().catch(() => ({{}}));
+              if (!response.ok) {{
+                throw new Error(payload.detail || payload.error || 'Could not create the Alcove thread.');
+              }}
+              const conversationId = payload.conversation_id;
+              const url = new URL('/', window.location.origin);
+              url.searchParams.set('workspace_id', workspaceId);
+              if (conversationId) url.searchParams.set('conversation_id', conversationId);
+              setStatus(`Sent. <a class="open-link" href="${{url.toString()}}">Open the Alcove thread</a>.`);
+              form.reset();
+              document.getElementById('workspace').value = workspaceId;
+              document.getElementById('channel').value = 'Private note';
+              document.getElementById('priority').value = 'normal';
+            }} catch (error) {{
+              setStatus(error.message || 'Could not create the Alcove thread.', true);
+            }} finally {{
+              submitButton.disabled = false;
+            }}
+          }});
+        </script>
+      </body>
+    </html>
+    """
+
+
 def render_workspaces(service: AgentRunnerService) -> str:
     rows = []
     for workspace in service.list_workspaces():
@@ -780,6 +1074,32 @@ def render_web_app() -> str:
             flex-wrap: wrap;
             margin-top: 10px;
           }
+          .home-workspace-browser {
+            min-height: 100%;
+            padding: 14px 12px 0 14px;
+          }
+          .home-list-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 0 12px;
+            border-bottom: 1px solid var(--line-soft);
+          }
+          .home-list-head h2 {
+            margin: 0 0 4px;
+            font-size: 20px;
+            line-height: 1.1;
+          }
+          .home-list-head p {
+            margin: 0;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .home-list-head .home-actions {
+            margin-top: 0;
+            justify-content: flex-end;
+          }
           .dropzone {
             border: 0;
             background: transparent;
@@ -818,7 +1138,7 @@ def render_web_app() -> str:
             margin-top: 0;
             border-top: 0;
             min-height: 100%;
-            padding: 0 12px 0 14px;
+            padding: 0;
             box-sizing: border-box;
           }
           .workspace-grid.home-list.is-active {
@@ -849,6 +1169,11 @@ def render_web_app() -> str:
             background: transparent;
             padding: 10px 0;
             cursor: pointer;
+          }
+          .workspace-card-summary {
+            display: grid;
+            gap: 4px;
+            min-width: 0;
           }
           .workspace-card-main:hover {
             background: transparent;
@@ -889,12 +1214,36 @@ def render_web_app() -> str:
             transform: rotate(90deg);
           }
           .workspace-card-title {
-            font-size: 13px;
-            font-weight: 400;
+            font-size: 14px;
+            font-weight: 700;
             margin: 0;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+          }
+          .workspace-card-subtitle,
+          .workspace-card-context {
+            font-size: 11px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .workspace-card-badges {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+          }
+          .workspace-card-badge {
+            border: 1px solid var(--line-soft);
+            background: #f6f8fb;
+            color: var(--muted);
+            font-size: 10px;
+            line-height: 1;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            padding: 4px 6px;
+            white-space: nowrap;
           }
           .workspace-card-drawer {
             padding: 0 0 10px;
@@ -1164,7 +1513,8 @@ def render_web_app() -> str:
           }
           .server-dot-online { background: var(--ok); }
           .server-dot-busy { background: var(--warning); }
-          .server-dot-offline { background: var(--danger); }
+          .server-dot-offline,
+          .server-dot-stale { background: var(--danger); }
           .context-grid {
             margin-top: 8px;
             display: grid;
@@ -1643,6 +1993,7 @@ def render_web_app() -> str:
             padding: 14px 0;
           }
           .mobile-toggle,
+          .mobile-preview-button,
           .mobile-back {
             display: none;
           }
@@ -1960,7 +2311,8 @@ def render_web_app() -> str:
             .shell { grid-template-columns: 1fr; }
             .pane-divider { display: none; }
             .pane.review-pane { display: none; }
-            .mobile-toggle { display: inline-flex; }
+            .mobile-toggle,
+            .mobile-preview-button { display: inline-flex; }
             .home-shell { grid-template-columns: 1fr; }
           }
           @media (max-width: 880px) {
@@ -2136,6 +2488,7 @@ def render_web_app() -> str:
                 </button>
               </div>
               <div class="topbar-right">
+                <button id="mobile-preview-button" class="topbar-button mobile-preview-button" type="button" onclick="openMobilePreview()">Preview</button>
                 <button id="menu-button" class="topbar-button" type="button" onclick="toggleActionsMenu()">Menu</button>
                 <div id="build-badge" class="build-badge">Build unavailable</div>
                 <div id="actions-menu" class="actions-menu" hidden>
@@ -2254,6 +2607,16 @@ def render_web_app() -> str:
                 <div id="conversation-settings-status" class="composer-hint"></div>
               </section>
               <section class="settings-section">
+                <h4>Image Library</h4>
+                <label>Library folder
+                  <input id="settings-image-library-folder" placeholder="/Users/sky/Pictures/Alcove Library" />
+                </label>
+                <div id="settings-image-library-status" class="composer-hint"></div>
+                <div class="button-row">
+                  <button type="button" onclick="saveImageLibraryFolder()">Load Library Folder</button>
+                </div>
+              </section>
+              <section class="settings-section">
                 <h4>Runtime</h4>
                 <label>Runtime
                   <select id="settings-runtime-family" onchange="updateRuntimeSettingsVisibility(); updateContextCapHint()">
@@ -2340,11 +2703,12 @@ def render_web_app() -> str:
             imageWorkflow: null,
             selectedImageId: null,
             imageRefineSettings: { enabled: false, threshold: 0.78, maxRetries: 1 },
-            imageGenerationSettings: { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, compositionSourceImageId: null, remixMode: 'match' },
+            imageGenerationSettings: { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, loraName: '', loraStrength: 0.75, compositionSourceImageId: null, remixMode: 'match' },
             imageReferenceResult: null,
             submitting: false,
             voiceCapturePending: false,
             eventCursor: '0',
+            apiProblem: null,
             assistantMode: 'ask',
             reviewPaneHidden:
               document.documentElement.classList.contains('chat-breakout') ||
@@ -2667,6 +3031,15 @@ def render_web_app() -> str:
             if (which === 'right') shell.classList.add('mobile-right');
           }
 
+          function openMobilePreview() {
+            if (!state.workspaceId || !state.conversationId) {
+              window.alert('Open a workspace first.');
+              return;
+            }
+            openMobilePane('right');
+            closeActionsMenu();
+          }
+
           function closeMobilePanes() {
             const shell = document.getElementById('shell');
             if (!shell) return;
@@ -2755,10 +3128,24 @@ def render_web_app() -> str:
             el.textContent = text;
           }
 
+          function markApiOk() {
+            state.apiProblem = null;
+          }
+
+          function markApiProblem(area, error) {
+            const message = String(error?.message || 'Connection lost');
+            state.apiProblem = {
+              area: String(area || 'sync'),
+              message,
+              at: new Date().toISOString(),
+            };
+            refreshWorkloadIndicators();
+          }
+
           function setServerDot(status, titleText) {
             const el = document.getElementById('server-chip');
             if (!el) return;
-            const normalized = status === 'online' || status === 'busy' ? status : 'offline';
+            const normalized = status === 'online' || status === 'busy' || status === 'stale' ? status : 'offline';
             el.className = `composer-server-dot server-dot-${normalized}`;
             el.title = titleText;
             el.setAttribute('aria-label', `Server status: ${titleText}`);
@@ -2888,6 +3275,12 @@ def render_web_app() -> str:
             if (breakoutButton) {
               breakoutButton.disabled = !hasConversation;
               breakoutButton.title = hasConversation ? '' : 'Open a conversation first.';
+            }
+            const mobilePreviewButton = document.getElementById('mobile-preview-button');
+            if (mobilePreviewButton) {
+              mobilePreviewButton.disabled = !hasConversation;
+              mobilePreviewButton.title = hasConversation ? 'Open preview and run output' : 'Open a workspace first.';
+              mobilePreviewButton.textContent = isStudioWorkspace(state.workspace) ? 'Preview' : 'Review';
             }
           }
 
@@ -3076,6 +3469,28 @@ def render_web_app() -> str:
             return formatElapsedDuration(finishedAt.valueOf() - startedAt.valueOf());
           }
 
+          function imageGenerationElapsedLabel(item) {
+            const startedAt = parseTimestamp(item?.started_at || item?.queued_at);
+            if (!startedAt) return '';
+            return formatElapsedDuration(Date.now() - startedAt.valueOf());
+          }
+
+          function imageGenerationPassLabel(item) {
+            const passes = Math.max(1, Number(item?.passes || 0) || 0);
+            return passes > 0 ? `${passes} pass${passes === 1 ? '' : 'es'}` : '';
+          }
+
+          function imageMetadataPassLabel(metadata) {
+            const passes = Math.max(1, Number(metadata?.steps || 0) || 0);
+            return passes > 0 ? String(passes) : '';
+          }
+
+          function imageMetadataGenerationTimeLabel(metadata) {
+            const rawMs = Number(metadata?.generation_duration_ms || metadata?.duration_ms || 0);
+            if (!Number.isFinite(rawMs) || rawMs <= 0) return '';
+            return formatElapsedDuration(rawMs);
+          }
+
           function escapeHtml(value) {
             return String(value)
               .replaceAll('&', '&amp;')
@@ -3175,6 +3590,26 @@ def render_web_app() -> str:
             return workspace.repo_path || 'No repo path set yet';
           }
 
+          function workspaceLastTaskLine(workspace) {
+            const title = String(workspace?.title || '').trim();
+            if (title) return title;
+            return isStudioWorkspace(workspace) ? 'Studio workspace' : 'Workspace chat';
+          }
+
+          function workspacePreviewBadge(workspace) {
+            if (!isStudioWorkspace(workspace)) return '';
+            if (String(workspace.workspace_kind || '') === 'studio_image') return 'Library';
+            return childFriendlyPreviewState(workspace);
+          }
+
+          function workspaceBadges(workspace) {
+            const badges = [isStudioWorkspace(workspace) ? studioKindLabel(workspace.workspace_kind) : 'Repo'];
+            const preview = workspacePreviewBadge(workspace);
+            if (preview) badges.push(preview);
+            if (workspace.publish_state === 'published') badges.push('Published');
+            return badges;
+          }
+
           function workspaceMetaLines(workspace) {
             const lines = [];
             const updated = formatStamp(workspace?.updated_at);
@@ -3190,11 +3625,19 @@ def render_web_app() -> str:
           function workspaceCardMarkup(workspace) {
             const workspaceId = String(workspace?.id || '').trim();
             const detailsOpen = state.workspaceDetailsOpenId === workspaceId;
+            const badges = workspaceBadges(workspace);
             return `
               <article class="workspace-card${detailsOpen ? ' workspace-card-open' : ''}">
                 <div class="workspace-card-row">
                   <button class="workspace-card-main" type="button" onclick="selectWorkspace('${workspaceId}')">
-                    <div class="workspace-card-title">${escapeHtml(workspaceTitle(workspace))}</div>
+                    <div class="workspace-card-summary">
+                      <div class="workspace-card-title">${escapeHtml(workspaceTitle(workspace))}</div>
+                      <div class="workspace-card-subtitle">${escapeHtml(workspaceSummaryLine(workspace))}</div>
+                      <div class="workspace-card-context">${escapeHtml(workspaceLastTaskLine(workspace))}</div>
+                      <div class="workspace-card-badges">
+                        ${badges.map((badge) => `<span class="workspace-card-badge">${escapeHtml(badge)}</span>`).join('')}
+                      </div>
+                    </div>
                   </button>
                   <button
                     class="workspace-card-info"
@@ -3427,8 +3870,16 @@ def render_web_app() -> str:
               return;
             }
             host.innerHTML = `
-              <section id="workspace-dropzone" class="workspace-grid home-list">
-                ${renderWorkspaceCards(workspaces)}
+              <section id="workspace-dropzone" class="home-workspace-browser">
+                <div class="home-list-head">
+                  <div>
+                    <h2>Workspaces</h2>
+                    <p>Choose a project to continue.</p>
+                  </div>
+                </div>
+                <section class="workspace-grid home-list">
+                  ${renderWorkspaceCards(workspaces)}
+                </section>
               </section>
             `;
           }
@@ -3506,12 +3957,11 @@ def render_web_app() -> str:
           }
 
           function renderHomePane() {
-            const recent = (state.workspaces || []).slice(0, 4);
             return `
               <section class="home-shell">
                 <section class="home-panel">
-	                  <h2>Bring in a project</h2>
-	                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
+		                  <h2>Bring in a project</h2>
+		                  <p>Start a Studio or map a local repo. Alcove keeps the chat, preview, and run details together.</p>
 	                  <div class="home-actions">
 	                    <button class="primary" type="button" onclick="openStudioModal()">New Studio</button>
 	                    <button type="button" onclick="openImageStudio()">Image Studio</button>
@@ -3525,11 +3975,8 @@ def render_web_app() -> str:
                   </div>
                 </section>
                 <section class="home-panel">
-                  <h3>Recent Workspaces</h3>
-                  <p>Pick up where you left off.</p>
-                  <section class="workspace-grid compact">
-                    ${recent.length ? renderWorkspaceCards(recent) : '<div class="empty">No recent workspaces yet.</div>'}
-                  </section>
+                  <h3>What Opens Here</h3>
+                  <p>The right pane shows previews, run output, changed files, checks, image libraries, publish links, and setup warnings for the workspace you choose on the left.</p>
                 </section>
               </section>
             `;
@@ -3641,12 +4088,15 @@ def render_web_app() -> str:
               const count = Math.max(1, Number(active.count || 1) || 1);
               const noun = count === 1 ? 'image' : 'images';
               const queuedSuffix = queuedCount > 0 ? ` +${queuedCount} queued` : '';
+              const elapsed = imageGenerationElapsedLabel(active);
+              const passLabel = imageGenerationPassLabel(active);
+              const detail = [passLabel, elapsed ? `for ${elapsed}` : ''].filter(Boolean).join(' · ');
               return {
                 chipState: 'running',
-                chipLabel: `image running${queuedSuffix}`,
-                chipTitle: `Generating ${count} ${noun}${queuedCount > 0 ? ` with ${queuedCount} more queued` : ''}.`,
+                chipLabel: `image running${elapsed ? ` ${elapsed}` : ''}${queuedSuffix}`,
+                chipTitle: `Generating ${count} ${noun}${detail ? ` · ${detail}` : ''}${queuedCount > 0 ? ` with ${queuedCount} more queued` : ''}.`,
                 dotStatus: 'busy',
-                dotTitle: `Image generation running${queuedCount > 0 ? ` with ${queuedCount} queued` : ''}`,
+                dotTitle: `Image generation running${detail ? ` · ${detail}` : ''}${queuedCount > 0 ? ` with ${queuedCount} queued` : ''}`,
               };
             }
             if (queuedCount > 0) {
@@ -3678,6 +4128,11 @@ def render_web_app() -> str:
             const queueCount = Number(status.queue_count || 0);
             const imageStatus = imageStudioWorkloadStatus();
             updateRunChip();
+            if (state.apiProblem) {
+              const area = state.apiProblem.area || 'sync';
+              setServerDot('stale', `Connection stale during ${area}: ${state.apiProblem.message || 'refresh failed'}`);
+              return;
+            }
             if (!state.serverInfo) {
               setServerDot('offline', 'Offline');
               return;
@@ -3707,6 +4162,12 @@ def render_web_app() -> str:
             const elapsed = currentRunElapsedLabel(status);
             const queueCount = Number(status.queue_count || 0);
             const imageStatus = imageStudioWorkloadStatus();
+            if (state.apiProblem) {
+              setChip('global-run-chip', 'stale', 'failed');
+              const chip = document.getElementById('global-run-chip');
+              if (chip) chip.title = `Last refresh failed during ${state.apiProblem.area || 'sync'}: ${state.apiProblem.message || 'refresh failed'}`;
+              return;
+            }
             const shouldPreferRunStatus = isActiveState(stateText) || queueCount > 0 || !imageStatus;
             if (!shouldPreferRunStatus && imageStatus) {
               setChip('global-run-chip', imageStatus.chipLabel, imageStatus.chipState);
@@ -3921,11 +4382,15 @@ def render_web_app() -> str:
           }
 
           function imageGenerationPassOptions(workflow = imageStudioWorkflow()) {
-            return Array.isArray(workflow?.generation_pass_options) ? workflow.generation_pass_options : [2, 4, 8, 12];
+            return Array.isArray(workflow?.generation_pass_options) ? workflow.generation_pass_options : [2, 4, 8, 10, 12, 16, 20];
           }
 
           function imageGenerationCountOptions(workflow = imageStudioWorkflow()) {
             return Array.isArray(workflow?.generation_count_options) ? workflow.generation_count_options : [1, 2, 3, 4];
+          }
+
+          function imageGenerationLoraOptions(workflow = imageStudioWorkflow()) {
+            return Array.isArray(workflow?.lora_options) ? workflow.lora_options : [];
           }
 
           function syncImageGenerationSettings(workflow = imageStudioWorkflow()) {
@@ -3934,7 +4399,7 @@ def render_web_app() -> str:
             const countOptions = imageGenerationCountOptions(workflow).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
             const passOptions = imageGenerationPassOptions(workflow).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
             const fallbackCount = Number(workflow?.default_generation_count || 1) || 1;
-            const fallbackPasses = Number(workflow?.default_generation_passes || 8) || 8;
+            const fallbackPasses = Number(workflow?.default_generation_passes || 2) || 2;
             const available = new Set(profiles.map((item) => String(item?.id || '').trim()).filter(Boolean));
             const images = Array.isArray(workflow?.images) ? workflow.images : [];
             const validImageIds = new Set(images.map((item) => String(item?.id || '').trim()).filter(Boolean));
@@ -3950,11 +4415,15 @@ def render_web_app() -> str:
               : (available.has(fallback) ? fallback : (profiles[0]?.id || fallback));
             next.passes = passOptions.includes(currentPasses)
               ? currentPasses
-              : (passOptions.includes(fallbackPasses) ? fallbackPasses : (passOptions[0] || 8));
+              : (passOptions.includes(fallbackPasses) ? fallbackPasses : (passOptions[0] || 2));
             if (!validImageIds.has(String(next.compositionSourceImageId || '').trim())) {
               next.compositionSourceImageId = null;
             }
             next.remixMode = String(next.remixMode || 'match') === 'remix' ? 'remix' : 'match';
+            const loraOptions = new Set(imageGenerationLoraOptions(workflow).map((item) => String(item?.name || '').trim()).filter(Boolean));
+            const currentLora = String(next.loraName || '').trim();
+            next.loraName = currentLora && loraOptions.has(currentLora) ? currentLora : '';
+            next.loraStrength = Number(next.loraStrength || 0.75) || 0.75;
             state.imageGenerationSettings = next;
           }
 
@@ -3962,7 +4431,9 @@ def render_web_app() -> str:
             const next = { ...(state.imageGenerationSettings || { count: 1, sizeProfileId: 'portrait-768x1024', passes: 2, compositionSourceImageId: null, remixMode: 'match' }) };
             if (field === 'count') next.count = Number(value) || 1;
             if (field === 'sizeProfileId') next.sizeProfileId = String(value || '').trim() || 'portrait-768x1024';
-            if (field === 'passes') next.passes = Number(value) || 8;
+            if (field === 'passes') next.passes = Number(value) || 2;
+            if (field === 'loraName') next.loraName = String(value || '').trim();
+            if (field === 'loraStrength') next.loraStrength = Number(value) || 0.75;
             if (field === 'remixMode') next.remixMode = String(value || '').trim() === 'remix' ? 'remix' : 'match';
             if (field === 'compositionSourceImageId') next.compositionSourceImageId = String(value || '').trim() || null;
             state.imageGenerationSettings = next;
@@ -3995,12 +4466,17 @@ def render_web_app() -> str:
             const payload = {
               count: Number(settings.count || workflow?.default_generation_count || 1) || 1,
               size_profile_id: String(settings.sizeProfileId || workflow?.default_generation_profile_id || 'portrait-768x1024'),
-              passes: Number(settings.passes || workflow?.default_generation_passes || 8) || 8,
+              passes: Number(settings.passes || workflow?.default_generation_passes || 2) || 2,
             };
             const compositionSourceImageId = String(settings.compositionSourceImageId || '').trim();
             if (compositionSourceImageId) {
               payload.composition_source_image_id = compositionSourceImageId;
               payload.remix_mode = String(settings.remixMode || 'match') === 'remix' ? 'remix' : 'match';
+            }
+            const loraName = String(settings.loraName || '').trim();
+            if (loraName) {
+              payload.lora_name = loraName;
+              payload.lora_strength = Number(settings.loraStrength || 0.75) || 0.75;
             }
             return payload;
           }
@@ -4012,6 +4488,8 @@ def render_web_app() -> str:
             if (!active && !queuedItems.length && !queue.last_error) return '';
             const visibleItems = queuedItems.slice(0, 3);
             const overflow = Math.max(0, queuedItems.length - visibleItems.length);
+            const activeElapsed = imageGenerationElapsedLabel(active);
+            const activePasses = imageGenerationPassLabel(active);
             return `
               <div class="composer-queue image-studio-queue">
                 <div class="composer-queue-head">
@@ -4021,12 +4499,12 @@ def render_web_app() -> str:
                 <div class="composer-queue-list">
                   ${
                     active
-                      ? `
-                        <div class="composer-queue-item">
-                          <span class="composer-queue-index">Now</span>
-                          <span class="composer-queue-preview">${escapeHtml(active.prompt_preview || 'Running image run')} · ${escapeHtml(String(active.count || 1))} image${Number(active.count || 1) === 1 ? '' : 's'}</span>
-                        </div>
-                      `
+	                      ? `
+	                        <div class="composer-queue-item">
+	                          <span class="composer-queue-index">Now</span>
+	                          <span class="composer-queue-preview">${escapeHtml(active.prompt_preview || 'Running image run')} · ${escapeHtml(String(active.count || 1))} image${Number(active.count || 1) === 1 ? '' : 's'}${activePasses ? ` · ${escapeHtml(activePasses)}` : ''}${activeElapsed ? ` · ${escapeHtml(activeElapsed)}` : ''}</span>
+	                        </div>
+	                      `
                       : ''
                   }
                   ${visibleItems.map((item) => `
@@ -4290,6 +4768,7 @@ def render_web_app() -> str:
             const generation = imageGenerationPayload(workflow);
             const generationProfiles = imageGenerationProfiles(workflow);
             const generationCounts = imageGenerationCountOptions(workflow);
+            const loraOptions = imageGenerationLoraOptions(workflow);
             const compositionSource = compositionSourceImage(workflow);
             const generationQueue = imageGenerationQueue(workflow);
             const selectedImageId = String(selectedImage?.id || '');
@@ -4369,11 +4848,26 @@ def render_web_app() -> str:
                         <span>Passes</span>
                         <select id="image-studio-passes" onchange="updateImageGenerationSetting('passes', this.value)">
                           ${imageGenerationPassOptions(workflow).map((passes) => `
-                            <option value="${escapeHtml(String(passes))}"${Number(passes) === Number(generation.passes || workflow?.default_generation_passes || 8) ? ' selected' : ''}>
+                            <option value="${escapeHtml(String(passes))}"${Number(passes) === Number(generation.passes || workflow?.default_generation_passes || 2) ? ' selected' : ''}>
                               ${escapeHtml(`${passes} passes`)}
                             </option>
                           `).join('')}
                         </select>
+                      </label>
+                      <label class="image-studio-inline-field" for="image-studio-lora">
+                        <span>LoRA</span>
+                        <select id="image-studio-lora" onchange="updateImageGenerationSetting('loraName', this.value)">
+                          <option value="">None</option>
+                          ${loraOptions.map((item) => `
+                            <option value="${escapeHtml(String(item.name || ''))}"${String(item.name || '') === String(generation.lora_name || '') ? ' selected' : ''}>
+                              ${escapeHtml(String(item.label || item.name || 'LoRA'))}
+                            </option>
+                          `).join('')}
+                        </select>
+                      </label>
+                      <label class="image-studio-inline-field" for="image-studio-lora-strength">
+                        <span>LoRA strength</span>
+                        <input id="image-studio-lora-strength" type="number" min="0" max="2" step="0.05" value="${escapeHtml(String(generation.lora_strength || 0.75))}" onchange="updateImageGenerationSetting('loraStrength', this.value)" />
                       </label>
                       <p class="image-studio-help">Auto-refine always judges and saves one candidate, even if the generation count above is higher.</p>
                       <label class="image-studio-checkbox">
@@ -4466,6 +4960,16 @@ def render_web_app() -> str:
                           ${
                             selectedImage.metadata?.width && selectedImage.metadata?.height
                               ? `<div><strong>Size</strong><span>${escapeHtml(String(selectedImage.metadata.width))} x ${escapeHtml(String(selectedImage.metadata.height))}</span></div>`
+                              : ''
+                          }
+                          ${
+                            imageMetadataPassLabel(selectedImage.metadata)
+                              ? `<div><strong>Number of passes</strong><span>${escapeHtml(imageMetadataPassLabel(selectedImage.metadata))}</span></div>`
+                              : ''
+                          }
+                          ${
+                            imageMetadataGenerationTimeLabel(selectedImage.metadata)
+                              ? `<div><strong>Time to generate</strong><span>${escapeHtml(imageMetadataGenerationTimeLabel(selectedImage.metadata))}</span></div>`
                               : ''
                           }
                           ${
@@ -4637,9 +5141,11 @@ def render_web_app() -> str:
               const payload = await fetchJson(
                 `/api/review?conversation_id=${encodeURIComponent(state.conversationId)}&workspace_id=${encodeURIComponent(state.workspaceId)}`
               );
+              markApiOk();
               renderReviewPane(payload);
               refreshWorkloadIndicators();
-            } catch (_) {
+            } catch (error) {
+              markApiProblem('review refresh', error);
               renderReviewPane({ run: state.runStatus, checks: {}, changed_files: [] });
               refreshWorkloadIndicators();
             }
@@ -4763,6 +5269,51 @@ def render_web_app() -> str:
             });
             updateRuntimeSettingsVisibility();
             updateContextCapHint();
+            updateImageLibrarySettings();
+          }
+
+          function updateImageLibrarySettings() {
+            const input = document.getElementById('settings-image-library-folder');
+            const status = document.getElementById('settings-image-library-status');
+            const workflow = imageStudioWorkflow();
+            if (!input || !status) return;
+            input.value = String(workflow?.library_folder_path || '');
+            if (String(state.workspace?.workspace_kind || '') === 'studio_image') {
+              status.textContent = workflow?.library_folder_path
+                ? `Current library: ${workflow.library_folder_path}`
+                : 'Choose a folder to use as this Image Studio library.';
+            } else {
+              status.textContent = 'Open an Image Studio workspace to set its library folder.';
+            }
+          }
+
+          async function saveImageLibraryFolder() {
+            const status = document.getElementById('settings-image-library-status');
+            const input = document.getElementById('settings-image-library-folder');
+            if (!state.workspaceId || String(state.workspace?.workspace_kind || '') !== 'studio_image') {
+              if (status) status.textContent = 'Open an Image Studio workspace first.';
+              return;
+            }
+            const folderPath = String(input?.value || '').trim();
+            if (!folderPath) {
+              if (status) status.textContent = 'Enter a folder path.';
+              return;
+            }
+            try {
+              const snapshot = await fetchJson(`/api/workspaces/${encodeURIComponent(state.workspaceId)}/image-workflow/library-folder`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ folder_path: folderPath }),
+              });
+              state.imageWorkflow = snapshot;
+              syncImageStudioSelection(snapshot);
+              updateImageLibrarySettings();
+              await loadWorkspaces();
+              await loadReview();
+              if (status) status.textContent = `Loaded library: ${snapshot.library_folder_path || folderPath}`;
+            } catch (error) {
+              if (status) status.textContent = error.message || 'Could not load that library folder.';
+            }
           }
 
           function renderConnectionsPanel() {
@@ -5665,8 +6216,10 @@ def render_web_app() -> str:
           async function loadServerInfo() {
             try {
               state.serverInfo = await fetchJson('/api/server-info');
-            } catch (_) {
+              markApiOk();
+            } catch (error) {
               state.serverInfo = null;
+              markApiProblem('server info', error);
             }
             renderStatus(state.runStatus);
           }
@@ -5683,16 +6236,20 @@ def render_web_app() -> str:
           async function pollStatus() {
             try {
               const status = await fetchJson('/api/run-status');
+              markApiOk();
               renderStatus(status);
               if (state.conversationId) {
                 await loadConversationDetail();
               }
-            } catch (_) {}
+            } catch (error) {
+              markApiProblem('run status', error);
+            }
           }
 
           async function pollEvents() {
             try {
               const payload = await fetchJson(`/api/events/since?cursor=${encodeURIComponent(state.eventCursor)}&limit=100`);
+              markApiOk();
               state.eventCursor = String(payload.next_cursor || state.eventCursor || '0');
               const events = payload.events || [];
               if (!events.length) return;
@@ -5735,7 +6292,9 @@ def render_web_app() -> str:
                 await loadConversationSettings();
               }
               if (refreshReview) await loadReview();
-            } catch (_) {}
+            } catch (error) {
+              markApiProblem('event sync', error);
+            }
           }
 
           async function bootstrap() {
@@ -5779,7 +6338,7 @@ def render_web_app() -> str:
               });
             }
             window.setInterval(pollEvents, 1200);
-            window.setInterval(updateRunChip, 1000);
+            window.setInterval(refreshWorkloadIndicators, 1000);
             window.setInterval(pollStatus, 5000);
             window.setInterval(loadServerInfo, 10000);
             window.setInterval(loadSetupStatus, 15000);
