@@ -9,8 +9,23 @@ the goal is not to make operations feel flashy. the goal is to make complex info
 ## related context
 
 - `wiki/life/index.md` / [[wiki/life/index|Life Philosophy]] - connects this design taste to the broader philosophy around calm tools, emotional cost, durable work, and private operating systems.
+- `/Users/sky/.codex/skills/sky-design-bible/SKILL.md` - private Codex skill that applies this living source of truth during UI design, review, and frontend polish work.
 
 ---
+
+## current taste drift
+
+Add dated notes here when Sky's eye changes. Newer entries supersede older guidance when they conflict, unless a project-local design bible says otherwise.
+
+### 2026-05-06
+
+- The design bible is the source of truth for evolving taste; the private `sky-design-bible` Codex skill is the agent behavior layer that reads and applies it.
+
+### 2026-05-11
+
+- Dashboard, admin, ops, finance, and report surfaces should default to a Codex-like neutral palette: white canvas, white or very light gray surfaces, cool gray borders, charcoal text, and gray chart fills.
+- Do not let the older "earthy" direction create a green, sage, beige, or organic cast across dashboards. Green is now only a semantic state color for explicit positive/healthy/completed meaning, not the default accent.
+- When a surface needs visual weight, use typography, spacing, thin gray dividers, and neutral contrast before color. Bar charts and metric graphics should usually be black/gray unless the color itself encodes meaning.
 
 ## core philosophy
 
@@ -103,15 +118,15 @@ avoid:
 - excessive radius
 - deep shadows
 
-### muted, earthy palette
-colors should be low-saturation and slightly organic rather than neon or default-saas blue.
+### neutral codex-like palette
+dashboards and operating tools should feel closer to the Codex app: white, light gray, charcoal text, cool gray borders, and restrained neutral fills.
 
 the palette should suggest:
-- paper
-- ink
-- ledger
-- field report
-- natural materials
+- white workspace
+- gray chrome
+- crisp dividers
+- readable reports
+- quiet control surfaces
 - operational seriousness
 
 ---
@@ -122,13 +137,13 @@ the palette should suggest:
 neutrals should dominate the interface. they create the feeling of calm and allow accent colors to retain meaning.
 
 ### positive / owned / stable
-greens should represent healthy assets, strong positions, positive inflow, completion, and grounded action.
+green may represent healthy assets, strong positions, positive inflow, completion, and grounded action, but only when the green is carrying that specific meaning. It should not be the default dashboard accent or chart color.
 
 ### caution / burden / liabilities
-warm rust, tan, or muted orange-brown tones should represent liabilities, drag, burden, cleanup, or caution.
+use caution colors sparingly and semantically. Avoid letting tan, beige, rust, or brown become the overall dashboard atmosphere unless a project-local style explicitly asks for it.
 
 ### usage rule
-at least 80–90% of the interface should be neutral. accents should be sparse and meaningful.
+at least 90–95% of dashboard/report interfaces should be neutral. accents should be sparse and meaningful.
 
 ---
 
@@ -136,22 +151,22 @@ at least 80–90% of the interface should be neutral. accents should be sparse a
 
 ```css
 :root {
-  --bg-canvas: #f5f5f3;
-  --bg-surface: #fcfcfa;
-  --border-subtle: #dddcd7;
+  --bg-canvas: #f7f7f8;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f3f4f6;
+  --border-subtle: #e5e7eb;
+  --border-strong: #d1d5db;
 
-  --text-primary: #2d2c29;
-  --text-secondary: #6f726d;
-  --text-muted: #8c8f89;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
 
-  --accent-green: #3f644b;
-  --accent-green-soft: #6f8b78;
-  --accent-green-faint: #d9e3db;
+  --accent-neutral: #111827;
+  --accent-neutral-soft: #9ca3af;
+  --accent-neutral-faint: #f3f4f6;
 
-  --accent-rust: #a66a3f;
-  --accent-rust-soft: #c08d65;
-  --accent-rust-faint: #eadccf;
-
-  --state-warning: #a66a3f;
-  --state-positive: #3f644b;
+  --state-positive: #166534;
+  --state-warning: #92400e;
+  --state-danger: #991b1b;
 }
+```
