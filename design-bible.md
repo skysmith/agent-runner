@@ -27,6 +27,13 @@ Add dated notes here when Sky's eye changes. Newer entries supersede older guida
 - Do not let the older "earthy" direction create a green, sage, beige, or organic cast across dashboards. Green is now only a semantic state color for explicit positive/healthy/completed meaning, not the default accent.
 - When a surface needs visual weight, use typography, spacing, thin gray dividers, and neutral contrast before color. Bar charts and metric graphics should usually be black/gray unless the color itself encodes meaning.
 
+### 2026-05-13
+
+- For browser-based control surfaces, prefer a white canvas that feels like it flows past the browser edge over a framed app window sitting on a separate background.
+- Avoid visible mode splits unless the selected mode materially changes the view, workflow, or available actions. Put prompt-behavior presets in an advanced/collapsed layer when the basic interaction is otherwise the same.
+- Do not split the same user intent into a decorative prompt and a separate input field. The invitation should label or become the actual composer where the user's messy thought lives.
+- For presence assistants, the basic surface should prefer one start/stop control for the live assistant loop. Background work should be launched through the assistant/tool bridge or advanced controls, not competing primary buttons.
+
 ## core philosophy
 
 ### 1. calm before clever

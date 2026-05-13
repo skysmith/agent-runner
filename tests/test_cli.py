@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from agent_runner.cli import _require_password_for_public_bind, build_parser
+from agent_runner.cli import _load_env_defaults, _require_password_for_public_bind, build_parser
 from agent_runner.models import AppSettings
 from agent_runner.settings_store import load_app_settings, save_app_settings
 
@@ -57,6 +58,29 @@ def test_doctor_uses_current_directory_by_default() -> None:
 def test_arcade_accepts_repo_override() -> None:
     args = build_parser().parse_args(["arcade", "--repo", "/tmp/example"])
     assert str(args.repo) == "/tmp/example"
+
+
+def test_load_env_defaults_reads_repo_env_local(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ALCOVE_REALTIME_VOICE", raising=False)
+    (tmp_path / ".env.local").write_text(
+        "OPENAI_API_KEY=sk-local-test\nexport ALCOVE_REALTIME_VOICE='marin'\n",
+        encoding="utf-8",
+    )
+
+    _load_env_defaults(repo=tmp_path)
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-local-test"
+    assert os.environ["ALCOVE_REALTIME_VOICE"] == "marin"
+
+
+def test_load_env_defaults_does_not_override_existing_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-existing-test")
+    (tmp_path / ".env.local").write_text("OPENAI_API_KEY=sk-local-test\n", encoding="utf-8")
+
+    _load_env_defaults(repo=tmp_path)
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-existing-test"
 
 
 def test_resolve_arcade_launch_context_prefers_installed_wrapper_state(monkeypatch, tmp_path) -> None:

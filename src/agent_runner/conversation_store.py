@@ -574,7 +574,7 @@ def _workspace_kind_from_raw(value: object) -> str:
     text = str(value or "standard").strip().lower()
     return (
         text
-        if text in {"standard", "studio_game", "studio_web", "studio_data", "studio_docs", "studio_image", "studio_video"}
+        if text in {"standard", "field_station", "studio_game", "studio_web", "studio_data", "studio_docs", "studio_image", "studio_video"}
         else "standard"
     )
 

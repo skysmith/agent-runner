@@ -2662,6 +2662,7 @@ def render_web_app() -> str:
             <div class="settings-body">
               <label>Studio
                 <select id="studio-workspace-kind" onchange="updateStudioTemplateOptions()">
+                  <option value="field_station">Field Station</option>
                   <option value="studio_game">Game Studio</option>
                   <option value="studio_web">Web Studio</option>
                   <option value="studio_data">Data Studio</option>
@@ -2725,6 +2726,10 @@ def render_web_app() -> str:
             { value: 'gpt-5.4', label: 'GPT-5.4 (medium)' },
           ];
           const STUDIO_TEMPLATES = {
+            field_station: [
+              { value: 'magic-button', label: 'Magic Button Console' },
+              { value: 'blank', label: 'Blank Start' },
+            ],
             studio_game: [
               { value: 'runner', label: 'Runner' },
               { value: 'platformer', label: 'Platformer' },
@@ -3545,11 +3550,13 @@ def render_web_app() -> str:
           }
 
           function isStudioWorkspace(workspace) {
-            return String(workspace?.workspace_kind || '').startsWith('studio_');
+            const value = String(workspace?.workspace_kind || '');
+            return value === 'field_station' || value.startsWith('studio_');
           }
 
           function studioKindLabel(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'Field Station';
             if (value === 'studio_image') return 'Image Studio';
             if (value === 'studio_video') return 'Video Studio';
             if (value === 'studio_web') return 'Web Studio';
@@ -3560,6 +3567,7 @@ def render_web_app() -> str:
 
           function studioArtifactNoun(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'field station';
             if (value === 'studio_image') return 'image library';
             if (value === 'studio_video') return 'video lab';
             if (value === 'studio_web') return 'site';
@@ -3569,7 +3577,7 @@ def render_web_app() -> str:
           }
 
           function studioPrimaryAction(workspaceKind) {
-            if (String(workspaceKind || '') === 'studio_image') return 'Open';
+            if (['field_station', 'studio_image'].includes(String(workspaceKind || ''))) return 'Open';
             return String(workspaceKind || '') === 'studio_game' ? 'Play' : 'Preview';
           }
 
@@ -3670,6 +3678,7 @@ def render_web_app() -> str:
 
           function studioPlaceholder(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'Capture a messy thought, choose a mode, and turn it into a saved artifact.';
             if (value === 'studio_image') return 'Use the image controls on the right, or ask for prompt help like "make it more toy-like" or "push the silhouette".';
             if (value === 'studio_video') return 'Ask for a video workflow step, like "set up image-to-video" or "help me tune this motion prompt".';
             if (value === 'studio_web') return 'Ask for a website change, like "make the hero bolder" or "add a pricing section".';
@@ -3680,6 +3689,7 @@ def render_web_app() -> str:
 
           function studioSummaryPrompt(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'Capture messy real-world input and turn it into useful Alcove artifacts.';
             if (value === 'studio_image') return 'Generate, upload, and organize image candidates from inside Alcove.';
             if (value === 'studio_video') return 'Plan and launch text-to-video or image-to-video work from inside Alcove.';
             if (value === 'studio_web') return 'Describe a change and Alcove will update the site.';
@@ -3690,6 +3700,7 @@ def render_web_app() -> str:
 
           function studioEmptyState(workspaceKind) {
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'The Field Station console will appear here after the workspace is created.';
             if (value === 'studio_image') return 'Generate or upload an image to start building a native Alcove image library.';
             if (value === 'studio_video') return 'Your video launchpad preview will appear here after the studio is created.';
             if (value === 'studio_web') return 'Preview will appear here after the website is created.';
@@ -3729,6 +3740,12 @@ def render_web_app() -> str:
               return {
                 title: 'Moon Mango Jump',
                 theme: 'A playful jungle at sunset with friendly robots.',
+              };
+            }
+            if (workspace === 'field_station') {
+              return {
+                title: 'New Field Station',
+                theme: 'A calm physical AI workbench for family, maker, business, real estate, demo, and Codex captures.',
               };
             }
             if (workspace === 'studio_web') {
@@ -3771,6 +3788,7 @@ def render_web_app() -> str:
             const defaults = studioTemplateDefaults(workspaceKind, templateKind);
             if (defaults?.title) return defaults.title;
             const value = String(workspaceKind || '');
+            if (value === 'field_station') return 'New Field Station';
             if (value === 'studio_image') return 'New Image Collection';
             if (value === 'studio_video') return 'New Video Lab';
             if (value === 'studio_web') return 'New Website';
@@ -3788,6 +3806,7 @@ def render_web_app() -> str:
 
           function childFriendlyPreviewState(workspace) {
             const stateText = String(workspace?.preview_state || '');
+            if (String(workspace?.workspace_kind || '') === 'field_station' && stateText === 'ready') return 'Ready to Capture';
             if (String(workspace?.workspace_kind || '') === 'studio_image') return 'Native Workflow';
             if (stateText === 'ready') {
               if (String(workspace?.workspace_kind || '') === 'studio_video') return 'Ready to Watch';
@@ -4269,7 +4288,9 @@ def render_web_app() -> str:
               if (title) title.textContent = state.workspace.artifact_title || state.workspace.game_title || state.workspace.display_name || 'Alcove Studio';
               if (copy) {
                   copy.textContent =
-                    String(state.workspace?.workspace_kind || '') === 'studio_image'
+                    String(state.workspace?.workspace_kind || '') === 'field_station'
+                      ? 'Capture messy real-world input, choose a mode, and save structured station artifacts.'
+                      : String(state.workspace?.workspace_kind || '') === 'studio_image'
                       ? 'Generate, upload, describe, and review image candidates without leaving Alcove.'
                       : String(state.workspace?.workspace_kind || '') === 'studio_video'
                         ? 'Use this workspace as the Alcove home for text-to-video and image-to-video experiments.'
@@ -6338,6 +6359,7 @@ def render_web_app() -> str:
               });
             }
             window.setInterval(pollEvents, 1200);
+            window.setInterval(updateRunChip, 1000);
             window.setInterval(refreshWorkloadIndicators, 1000);
             window.setInterval(pollStatus, 5000);
             window.setInterval(loadServerInfo, 10000);

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -237,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _load_env_defaults(repo=getattr(args, "repo", None))
 
     if args.command == "run":
         config = RunnerConfig(
@@ -413,6 +415,57 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 2
+
+
+def _load_env_defaults(*, repo: Path | None) -> None:
+    paths: list[Path] = []
+    explicit = os.environ.get("ALCOVE_ENV_FILE", "").strip() or os.environ.get("AGENT_RUNNER_ENV_FILE", "").strip()
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    for base in (repo.expanduser() if repo else None, Path.cwd()):
+        if base is None:
+            continue
+        paths.extend([base / ".env.local", base / ".env"])
+
+    seen: set[Path] = set()
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        _load_env_file_if_present(resolved)
+
+
+def _load_env_file_if_present(path: Path) -> None:
+    if not path.is_file():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ or not _valid_env_key(key):
+            continue
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+def _valid_env_key(key: str) -> bool:
+    if not (key[0].isalpha() or key[0] == "_"):
+        return False
+    return all(char.isalnum() or char == "_" for char in key)
 
 
 def _require_password_for_public_bind(*, host: str, password: str | None, command: str) -> None:

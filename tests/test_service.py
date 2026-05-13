@@ -47,6 +47,27 @@ class RecordingPhaseClient(FakePhaseClient):
         return super().run(request)
 
 
+class FieldStationPhaseClient:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def run(self, request) -> CodexExecResult:
+        self.requests.append(request)
+        return CodexExecResult(
+            payload={
+                "title": "Moon Rover Puppet Plan",
+                "summary": "A practical maker plan for the cardboard rover idea.",
+                "artifact_markdown": "# Moon Rover Puppet Plan\n\n## Parts\n\n- cardboard\n- tape\n\n## Next Step\n\nBuild the base.",
+                "evidence": ["Mode prompt used maker constraints.", "Permission lane stayed read-only."],
+                "risks": ["Use scissors with supervision."],
+                "suggested_next_action": "Approve the plan, then queue a parts checklist.",
+            },
+            raw_jsonl="",
+            stderr="",
+            return_code=0,
+        )
+
+
 class FailingPhaseClient:
     def run(self, request) -> CodexExecResult:
         raise RuntimeError("provider exploded")
@@ -704,6 +725,12 @@ def test_create_studio_workspace_defaults_unknown_game_template_to_runner(tmp_pa
 def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: Path) -> None:
     service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Studio ready"))
 
+    station = service.create_studio_workspace(
+        workspace_kind="field_station",
+        artifact_title="Garage Console",
+        template_kind="magic-button",
+        theme_prompt="A calm tabletop AI workbench with a friendly face.",
+    )["workspace"]
     web = service.create_studio_workspace(
         workspace_kind="studio_web",
         artifact_title="Northstar Site",
@@ -723,6 +750,54 @@ def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: 
         theme_prompt="Friendly setup docs for new builders.",
     )["workspace"]
 
+    assert station["workspace_kind"] == "field_station"
+    assert station["artifact_title"] == "Garage Console"
+    assert station["preview_state"] == "ready"
+    assert (Path(str(station["repo_path"])) / "field-station.js").exists()
+    assert "Field Station" in (Path(str(station["repo_path"])) / "index.html").read_text(encoding="utf-8")
+    station_js = (Path(str(station["repo_path"])) / "field-station.js").read_text(encoding="utf-8")
+    assert "/api/field-station/missions" in station_js
+    assert "/api/field-station/jobs" in station_js
+    assert 'provider: "codex"' in station_js
+    assert "codex_handoff" in station_js
+    assert "Artifact review drawer" in station_js
+    assert "RTCPeerConnection" in station_js
+    assert "/api/field-station/realtime-client-secret" in station_js
+    assert "WAKE ALCOVE" in station_js
+    assert "ALCOVE AWAKE" in station_js
+    assert "START ALCOVE" not in station_js
+    assert "Tap to cancel" in station_js
+    assert "Mic permission did not finish" in station_js
+    assert "waitForDataChannelOpen" in station_js
+    assert "queueRealtimeAlcoveJob" in station_js
+    assert "function_call_output" in station_js
+    assert 'id="capture-button"' not in station_js
+    assert ">MIC<" not in station_js
+    assert "SpeechRecognition" in station_js
+    assert "capture-diagnostics" in station_js
+    assert "/api/field-station/captures" in station_js
+    assert "/api/field-station/station-events" in station_js
+    assert "/api/events/since" in station_js
+    assert "Project library" in station_js
+    assert "Button test" in station_js
+    assert "capture-image-input" in station_js
+    assert "camera-button" in station_js
+    assert "/api/field-station/capture-assets" in station_js
+    assert "queueDerivedJob" in station_js
+    assert "data-state=\"idle\"" in station_js
+    assert "Background jobs" in station_js
+    assert "Review tray" in station_js
+    assert "Owner briefing" in station_js
+    assert "Read-only adapters" in station_js
+    assert "/api/field-station/owner-briefings" in station_js
+    assert "pendingReviews.length && reviewDrawerOpen" in station_js
+    assert 'setStationState("needs-review", "Needs review")' not in station_js
+    station_js_path = Path(str(station["repo_path"])) / "field-station.js"
+    station_js_path.write_text("old generated preview", encoding="utf-8")
+    refreshed_station = service.refresh_studio_preview(str(station["id"]))
+    assert refreshed_station["preview_state"] == "ready"
+    assert "Project library" in station_js_path.read_text(encoding="utf-8")
+
     assert web["workspace_kind"] == "studio_web"
     assert web["artifact_title"] == "Northstar Site"
     assert (Path(str(web["repo_path"])) / "app.js").exists()
@@ -738,6 +813,234 @@ def test_create_additional_studio_kinds_scaffold_previewable_projects(tmp_path: 
     published = service.publish_studio_workspace(str(web["id"]))
     assert published["publish_state"] == "published"
     assert str(published["publish_url"]).startswith("/play/")
+
+
+def test_field_station_orchestration_queues_fake_job_and_review_bundle(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Station ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="field_station",
+        artifact_title="Garage Console",
+        template_kind="magic-button",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+
+    created = service.create_field_station_mission(
+        workspace_id=workspace_id,
+        goal="Turn the cardboard rover idea into a build plan.",
+        mode="maker",
+        permission_lane="read-only",
+        expected_output="project_plan",
+    )
+    mission = created["mission"]
+    queued = service.create_field_station_job(
+        workspace_id=workspace_id,
+        mission_id=str(mission["id"]),
+        provider="fake",
+    )
+
+    assert queued["job"]["status"] == "queued"
+    _wait_for(lambda: service.get_field_station_snapshot(workspace_id)["reviews"])
+    snapshot = service.get_field_station_snapshot(workspace_id)
+    job = snapshot["jobs"][0]
+    review = snapshot["reviews"][0]
+    assert job["status"] == "needs_review"
+    assert review["status"] == "pending"
+    assert review["artifact_paths"]
+    assert (service.conversation_store.workspace_dir(workspace_id) / str(review["artifact_paths"][0])).exists()
+
+    approved = service.approve_field_station_review(workspace_id=workspace_id, review_id=str(review["id"]))
+    assert approved["review"]["status"] == "approved"
+    assert service.get_field_station_snapshot(workspace_id)["jobs"][0]["status"] == "succeeded"
+
+
+def test_field_station_capture_library_and_button_bridge_queue_jobs(tmp_path: Path) -> None:
+    service = _make_service(tmp_path, phase_client=FakePhaseClient(message="Station ready"))
+    workspace = service.create_studio_workspace(
+        workspace_kind="field_station",
+        artifact_title="Garage Console",
+        template_kind="magic-button",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+
+    capture_response = service.create_field_station_capture(
+        workspace_id=workspace_id,
+        mode="family",
+        source="voice",
+        text="Penny drew a moon fox. Turn it into a mission card.",
+        metadata={"voice_state": "heard"},
+    )
+    capture = capture_response["capture"]
+    mission = service.create_field_station_mission(
+        workspace_id=workspace_id,
+        goal="Penny drew a moon fox. Turn it into a mission card.",
+        mode="family",
+        capture_id=str(capture["id"]),
+    )["mission"]
+
+    assert mission["capture_id"] == capture["id"]
+    assert mission["capture_snapshot"]["source"] == "voice"
+    snapshot = service.get_field_station_snapshot(workspace_id)
+    assert snapshot["captures"][0]["text"].startswith("Penny drew")
+    assert snapshot["library"]["captures"][0]["id"] == capture["id"]
+    assert snapshot["station"]["services"][0]["id"] == "button"
+
+    bridge = service.trigger_field_station_station_event(
+        workspace_id=workspace_id,
+        event_type="button.capture",
+        payload={
+            "mode": "maker",
+            "text": "Build a cardboard rover from the drawer parts.",
+            "provider": "fake",
+            "simulated": True,
+        },
+    )
+    assert bridge["capture"]["source"] == "physical_button"
+    assert bridge["mission"]["capture_id"] == bridge["capture"]["id"]
+    assert bridge["job"]["status"] == "queued"
+    _wait_for(lambda: service.get_field_station_snapshot(workspace_id)["reviews"])
+    after = service.get_field_station_snapshot(workspace_id)
+    assert after["library"]["artifacts"]
+    assert any(event["type"] == "station.button.capture" for event in after["events"])
+
+    asset = service.create_field_station_capture_asset(
+        workspace_id=workspace_id,
+        data_url="data:image/png;base64,aGVsbG8=",
+        file_name="moon-fox.png",
+        label="moon fox drawing",
+        source="upload",
+    )["attachment"]
+    image_capture = service.create_field_station_capture(
+        workspace_id=workspace_id,
+        mode="family",
+        source="camera",
+        text="Use this drawing as the story seed.",
+        attachments=[asset],
+    )["capture"]
+    assert image_capture["attachments"][0]["mime_type"] == "image/png"
+    assert (service.conversation_store.workspace_dir(workspace_id) / str(asset["path"])).read_bytes() == b"hello"
+    image_snapshot = service.get_field_station_snapshot(workspace_id)
+    assert image_snapshot["library"]["captures"][0]["attachments"][0]["url"].startswith("/api/field-station/capture-assets")
+
+
+def test_field_station_codex_worker_creates_mode_artifact_and_review_bundle(tmp_path: Path) -> None:
+    phase_client = FieldStationPhaseClient()
+    service = _make_service(tmp_path, phase_client=phase_client)
+    workspace = service.create_studio_workspace(
+        workspace_kind="field_station",
+        artifact_title="Garage Console",
+        template_kind="magic-button",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+    asset = service.create_field_station_capture_asset(
+        workspace_id=workspace_id,
+        data_url="data:image/png;base64,aGVsbG8=",
+        file_name="rover-parts.png",
+        label="rover parts photo",
+        source="upload",
+    )["attachment"]
+    capture = service.create_field_station_capture(
+        workspace_id=workspace_id,
+        mode="maker",
+        source="upload",
+        text="Turn the cardboard rover idea into a build plan.",
+        attachments=[asset],
+    )["capture"]
+
+    created = service.create_field_station_mission(
+        workspace_id=workspace_id,
+        goal="Turn the cardboard rover idea into a build plan.",
+        mode="maker",
+        permission_lane="read-only",
+        capture_id=str(capture["id"]),
+    )
+    mission = created["mission"]
+    assert mission["expected_output"] == "project_plan"
+
+    queued = service.create_field_station_job(
+        workspace_id=workspace_id,
+        mission_id=str(mission["id"]),
+        provider="codex",
+    )
+    assert queued["job"]["provider"] == "codex"
+
+    _wait_for(lambda: service.get_field_station_snapshot(workspace_id)["reviews"])
+    snapshot = service.get_field_station_snapshot(workspace_id)
+    job = snapshot["jobs"][0]
+    review = snapshot["reviews"][0]
+    artifact_path = service.conversation_store.workspace_dir(workspace_id) / str(review["artifact_paths"][0])
+
+    assert job["status"] == "needs_review"
+    assert job["result_metadata"]["provider"] == "codex"
+    assert review["title"] == "Moon Rover Puppet Plan"
+    assert "cardboard rover idea" in phase_client.requests[0].prompt
+    assert "rover parts photo" in phase_client.requests[0].prompt
+    assert phase_client.requests[0].phase_name == "field-station-codex"
+    assert artifact_path.exists()
+    assert "Build the base" in artifact_path.read_text(encoding="utf-8")
+    artifact_payload = service.get_field_station_artifact(
+        workspace_id=workspace_id,
+        artifact_path=str(review["artifact_paths"][0]),
+    )
+    assert artifact_payload["file_name"].endswith(".md")
+    assert "Moon Rover Puppet Plan" in artifact_payload["content"]
+
+
+def test_field_station_owner_briefing_uses_read_only_source_adapters(tmp_path: Path) -> None:
+    phase_client = RecordingPhaseClient(message="fallback please")
+    service = _make_service(tmp_path, phase_client=phase_client)
+    workspace = service.create_studio_workspace(
+        workspace_kind="field_station",
+        artifact_title="Garage Console",
+        template_kind="magic-button",
+    )["workspace"]
+    workspace_id = str(workspace["id"])
+
+    initial = service.get_field_station_snapshot(workspace_id)
+    assert initial["owner_briefing"]["permission_lane"] == "read-only"
+    assert any(source["id"] == "sample_ck_customer_threads" for source in initial["briefing_sources"])
+
+    custom_source = service.create_field_station_briefing_source(
+        workspace_id=workspace_id,
+        kind="manual",
+        label="Wholesale notes",
+        summary="Read-only notes about two wholesale follow-ups waiting for owner attention.",
+        sample_items=[
+            {
+                "title": "Boutique reorder question",
+                "detail": "Draft a reply, but do not send it.",
+                "urgency": "soon",
+            }
+        ],
+    )["source"]
+
+    queued = service.create_field_station_owner_briefing(
+        workspace_id=workspace_id,
+        source_ids=["sample_ck_customer_threads", custom_source["id"]],
+        note="Focus on replies that need Sky today.",
+        provider="codex",
+    )
+
+    assert queued["capture"]["source"] == "owner_briefing"
+    assert queued["mission"]["mode"] == "business"
+    assert queued["mission"]["expected_output"] == "owner_briefing"
+    assert queued["mission"]["permission_lane"] == "read-only"
+    assert queued["job"]["provider"] == "codex"
+    assert len(queued["capture"]["metadata"]["briefing_sources"]) == 2
+
+    _wait_for(lambda: service.get_field_station_snapshot(workspace_id)["reviews"])
+    snapshot = service.get_field_station_snapshot(workspace_id)
+    review = snapshot["reviews"][0]
+    artifact = service.get_field_station_artifact(
+        workspace_id=workspace_id,
+        artifact_path=str(review["artifact_paths"][0]),
+    )
+
+    assert "Customer threads" in phase_client.requests[0].prompt
+    assert "Wholesale notes" in phase_client.requests[0].prompt
+    assert "Approval boundary" in phase_client.requests[0].prompt
+    assert "## Briefing Sources" in artifact["content"]
+    assert "Customer threads" in artifact["content"]
+    assert "Wholesale notes" in artifact["content"]
 
 
 def test_image_studio_runs_native_image_3d_and_video_workflow(tmp_path: Path) -> None:

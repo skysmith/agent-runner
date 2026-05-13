@@ -20,6 +20,11 @@ from urllib.parse import unquote, urlparse
 from .context_assembler import ContextAssembler
 from .conversation_store import ConversationStore, WorkspaceConversationController
 from .doctor import run_doctor
+from .field_station_prompts import (
+    build_field_station_worker_prompt,
+    default_expected_output_for_mode,
+    field_station_worker_schema,
+)
 from .image_workflow import (
     ImageTo3DProvider,
     ImageToVideoProvider,
@@ -43,6 +48,11 @@ from .image_workflow import (
     zimage_lora_options,
 )
 from .models import AssistantCapabilityMode, AppSettings, ChecksPolicy, ConversationRecord, ProviderKind, RunMode
+from .orchestration import (
+    FieldStationOrchestrationStore,
+    normalize_field_station_mode,
+    timestamp_now,
+)
 from .page_context import normalize_page_context
 from .providers import (
     ExecutionRequest,
@@ -57,6 +67,7 @@ from .run_coordinator import RunCoordinator, RunStatus
 from .runner import AgentRunner, RunnerConfig
 from .settings_store import load_app_settings, save_app_settings
 from .studio import (
+    STUDIO_KIND_LABELS,
     create_studio_project,
     normalize_template_kind,
     normalize_workspace_kind,
@@ -76,7 +87,7 @@ ACTION_REQUEST_PATTERN = re.compile(
 READ_ONLY_MESSAGE_PATTERN = re.compile(
     r"\b(analy[sz]e|describe|explain|inspect|review|summari[sz]e|tell me|walk me through|what|why|how)\b"
 )
-KNOWN_STUDIO_KINDS = frozenset({"studio_game", "studio_web", "studio_data", "studio_docs", "studio_image", "studio_video"})
+KNOWN_STUDIO_KINDS = frozenset({"field_station", "studio_game", "studio_web", "studio_data", "studio_docs", "studio_image", "studio_video"})
 
 
 @dataclass(slots=True)
@@ -217,6 +228,9 @@ class AgentRunnerService:
         self._pending_image_generations: deque[QueuedImageGenerationRequest] = deque()
         self._active_image_generation: QueuedImageGenerationRequest | None = None
         self._image_generation_errors: dict[str, str] = {}
+        self._field_station_queue_lock = threading.Lock()
+        self._pending_field_station_jobs: deque[tuple[str, str]] = deque()
+        self._active_field_station_job: tuple[str, str] | None = None
         self._image_workflow_lock = threading.Lock()
         self._image_workflow_provider = image_workflow_provider or default_image_workflow_provider()
         self._image_to_3d_provider = image_to_3d_provider or default_image_to_3d_provider()
@@ -431,6 +445,521 @@ class AgentRunnerService:
             },
         }
 
+    def get_field_station_snapshot(self, workspace_id: str) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        store = self._field_station_store(workspace_id)
+        snapshot = store.snapshot()
+        queue = self._field_station_queue_payload(workspace_id=workspace_id)
+        jobs = []
+        queued_positions = {str(item["id"]): item.get("queue_position") for item in queue["items"]}
+        active_id = str(queue["active"]["id"]) if isinstance(queue.get("active"), dict) else ""
+        for raw_job in snapshot["jobs"]:
+            job = dict(raw_job)
+            job_id = str(job.get("id") or "")
+            if job_id == active_id:
+                job["queue_position"] = 0
+            elif job_id in queued_positions:
+                job["queue_position"] = queued_positions[job_id]
+            jobs.append(job)
+        return {
+            "workspace_id": workspace_id,
+            "captures": [_field_station_capture_payload(capture) for capture in _snapshot_list(snapshot["captures"])],
+            "missions": snapshot["missions"],
+            "jobs": jobs,
+            "reviews": snapshot["reviews"],
+            "briefing_sources": _field_station_briefing_sources_payload(workspace_id, snapshot),
+            "events": snapshot["events"],
+            "queue": queue,
+            "station": _field_station_station_payload(snapshot=snapshot, queue=queue),
+            "library": _field_station_library_payload(snapshot),
+            "owner_briefing": _field_station_owner_briefing_payload(workspace_id, snapshot),
+        }
+
+    def create_field_station_capture(
+        self,
+        *,
+        workspace_id: str,
+        text: str,
+        mode: str | None = None,
+        source: str | None = None,
+        attachments: list[dict[str, object]] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        resolved_mode = normalize_field_station_mode(mode)
+        capture = self._field_station_store(workspace_id).create_capture(
+            workspace_id=workspace_id,
+            mode=resolved_mode,
+            text=text,
+            source=source,
+            attachments=attachments,
+            metadata=metadata,
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "capture-created",
+                "capture_id": capture["id"],
+                "source": capture["source"],
+            },
+        )
+        return {"capture": capture, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
+    def create_field_station_capture_asset(
+        self,
+        *,
+        workspace_id: str,
+        data_url: str,
+        file_name: str | None = None,
+        label: str | None = None,
+        source: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        attachment = self._field_station_store(workspace_id).write_capture_asset(
+            workspace_id=workspace_id,
+            data_url=data_url,
+            file_name=file_name,
+            label=label,
+            source=source,
+            metadata=metadata,
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "capture-asset-created",
+                "asset_id": attachment["id"],
+                "path": attachment["path"],
+            },
+        )
+        return {
+            "attachment": _field_station_attachment_payload(attachment, workspace_id=workspace_id),
+            "snapshot": self.get_field_station_snapshot(workspace_id),
+        }
+
+    def list_field_station_briefing_sources(self, workspace_id: str) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        snapshot = self._field_station_store(workspace_id).snapshot()
+        return {
+            "workspace_id": workspace_id,
+            "sources": _field_station_briefing_sources_payload(workspace_id, snapshot),
+            "owner_briefing": _field_station_owner_briefing_payload(workspace_id, snapshot),
+        }
+
+    def create_field_station_briefing_source(
+        self,
+        *,
+        workspace_id: str,
+        kind: str | None = None,
+        label: str,
+        summary: str | None = None,
+        sample_items: list[dict[str, object]] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        source = self._field_station_store(workspace_id).create_briefing_source(
+            workspace_id=workspace_id,
+            kind=kind,
+            label=label,
+            summary=summary,
+            sample_items=sample_items,
+            metadata=metadata,
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "briefing-source-created",
+                "source_id": source["id"],
+            },
+        )
+        return {
+            "source": _field_station_briefing_source_payload(source),
+            "snapshot": self.get_field_station_snapshot(workspace_id),
+        }
+
+    def create_field_station_owner_briefing(
+        self,
+        *,
+        workspace_id: str,
+        source_ids: list[object] | None = None,
+        note: str | None = None,
+        provider: str | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        store = self._field_station_store(workspace_id)
+        snapshot = store.snapshot()
+        selected_sources = _select_field_station_briefing_sources(
+            _field_station_briefing_sources_payload(workspace_id, snapshot),
+            source_ids,
+        )
+        if not selected_sources:
+            raise ValueError("At least one briefing source is required.")
+        clean_note = (note or "").strip()
+        source_context = _field_station_briefing_context(selected_sources)
+        goal = "\n".join(
+            item
+            for item in [
+                "Prepare a read-only owner briefing for Clementine Kids.",
+                f"Focus: {clean_note}" if clean_note else "",
+                "Use only the source summaries and sample items below. Do not claim to send emails, refund orders, update inventory, or contact customers.",
+                "",
+                source_context,
+            ]
+            if item != ""
+        )
+        capture_response = self.create_field_station_capture(
+            workspace_id=workspace_id,
+            mode="business",
+            source="owner_briefing",
+            text=clean_note or "Prepare today's owner briefing from read-only business sources.",
+            metadata={
+                "briefing_sources": selected_sources,
+                "source_ids": [source["id"] for source in selected_sources],
+                "approval_boundary": (
+                    "Read-only summary and draft recommendations only. Human approval is required for emails, "
+                    "refunds, orders, payments, calendar sends, inventory edits, or anything customer-facing."
+                ),
+            },
+        )
+        capture = capture_response["capture"]
+        mission_response = self.create_field_station_mission(
+            workspace_id=workspace_id,
+            source="field_station_owner_briefing",
+            mode="business",
+            goal=goal,
+            target="clementine-kids-owner-brief",
+            capture_id=str(capture["id"]),
+            permission_lane="read-only",
+            expected_output="owner_briefing",
+            requires_approval=True,
+        )
+        job_response = self.create_field_station_job(
+            workspace_id=workspace_id,
+            mission_id=str(mission_response["mission"]["id"]),
+            provider=provider or "codex",
+        )
+        event = store.record_station_event(
+            workspace_id=workspace_id,
+            event_type="station.owner_briefing.queued",
+            payload={
+                "capture_id": capture["id"],
+                "mission_id": mission_response["mission"]["id"],
+                "job_id": job_response["job"]["id"],
+                "source_count": len(selected_sources),
+            },
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "owner-briefing-queued",
+                "capture_id": capture["id"],
+                "mission_id": mission_response["mission"]["id"],
+                "job_id": job_response["job"]["id"],
+                "source_count": len(selected_sources),
+            },
+        )
+        return {
+            "event": event,
+            "capture": capture,
+            "mission": mission_response["mission"],
+            "job": job_response["job"],
+            "sources": selected_sources,
+            "snapshot": self.get_field_station_snapshot(workspace_id),
+        }
+
+    def create_field_station_mission(
+        self,
+        *,
+        workspace_id: str,
+        goal: str,
+        conversation_id: str | None = None,
+        source: str | None = None,
+        mode: str | None = None,
+        target: str | None = None,
+        permission_lane: str | None = None,
+        expected_output: str | None = None,
+        requires_approval: bool = True,
+        capture_id: str | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        if conversation_id:
+            self.get_conversation(conversation_id, workspace_id=workspace_id)
+        resolved_mode = normalize_field_station_mode(mode)
+        mission = self._field_station_store(workspace_id).create_mission(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            source=source,
+            mode=resolved_mode,
+            goal=goal,
+            target=target,
+            permission_lane=permission_lane,
+            expected_output=expected_output or default_expected_output_for_mode(resolved_mode),
+            requires_approval=requires_approval,
+            capture_id=capture_id,
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "mission-created",
+                "mission_id": mission["id"],
+                "capture_id": mission.get("capture_id"),
+            },
+        )
+        return {"mission": mission, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
+    def create_field_station_job(
+        self,
+        *,
+        workspace_id: str,
+        mission_id: str,
+        provider: str | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        store = self._field_station_store(workspace_id)
+        job = store.create_job(workspace_id=workspace_id, mission_id=mission_id, provider=provider)
+        self._enqueue_field_station_job(workspace_id, str(job["id"]))
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "job-queued",
+                "job_id": job["id"],
+                "mission_id": mission_id,
+            },
+        )
+        return {"job": job, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
+    def cancel_field_station_job(self, *, workspace_id: str, job_id: str) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        removed_from_queue = False
+        with self._field_station_queue_lock:
+            retained: deque[tuple[str, str]] = deque()
+            for item in self._pending_field_station_jobs:
+                if item == (workspace_id, job_id):
+                    removed_from_queue = True
+                    continue
+                retained.append(item)
+            self._pending_field_station_jobs = retained
+        job = self._field_station_store(workspace_id).request_cancel_job(job_id)
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "job-cancelled",
+                "job_id": job_id,
+                "removed_from_queue": removed_from_queue,
+            },
+        )
+        return {"job": job, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
+    def approve_field_station_review(self, *, workspace_id: str, review_id: str) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        review = self._field_station_store(workspace_id).approve_review(review_id)
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "review-approved",
+                "review_id": review_id,
+            },
+        )
+        return {"review": review, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
+    def get_field_station_artifact(self, *, workspace_id: str, artifact_path: str) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        clean_path = artifact_path.strip().lstrip("/")
+        if not clean_path:
+            raise ValueError("Artifact path is required.")
+        workspace_dir = self.conversation_store.workspace_dir(workspace_id).resolve()
+        artifact_root = (workspace_dir / "field-station" / "artifacts").resolve()
+        candidate = (workspace_dir / clean_path).resolve()
+        if candidate != artifact_root and artifact_root not in candidate.parents:
+            raise ValueError("Invalid Field Station artifact path.")
+        if not candidate.exists() or not candidate.is_file():
+            raise FileNotFoundError(clean_path)
+        return {
+            "workspace_id": workspace_id,
+            "path": clean_path,
+            "file_name": candidate.name,
+            "content": candidate.read_text(encoding="utf-8", errors="replace"),
+        }
+
+    def field_station_capture_asset_file(self, *, workspace_id: str, asset_path: str) -> Path:
+        self._require_field_station_workspace(workspace_id)
+        clean_path = asset_path.strip().lstrip("/")
+        if not clean_path:
+            raise ValueError("Capture asset path is required.")
+        workspace_dir = self.conversation_store.workspace_dir(workspace_id).resolve()
+        asset_root = (workspace_dir / "field-station" / "capture-assets").resolve()
+        candidate = (workspace_dir / clean_path).resolve()
+        if candidate != asset_root and asset_root not in candidate.parents:
+            raise ValueError("Invalid Field Station capture asset path.")
+        if not candidate.exists() or not candidate.is_file():
+            raise FileNotFoundError(clean_path)
+        return candidate
+
+    def trigger_field_station_station_event(
+        self,
+        *,
+        workspace_id: str,
+        event_type: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self._require_field_station_workspace(workspace_id)
+        clean_event_type = str(event_type or "").strip().lower().replace("_", ".")
+        body = dict(payload or {})
+        if clean_event_type == "button.capture":
+            mode = normalize_field_station_mode(str(body.get("mode") or "maker"))
+            text = str(body.get("text") or "").strip() or "Physical capture button was pressed. Prepare a practical Field Station capture."
+            capture_response = self.create_field_station_capture(
+                workspace_id=workspace_id,
+                mode=mode,
+                source="physical_button",
+                text=text,
+                metadata={
+                    "bridge_event_type": clean_event_type,
+                    "trigger": "button",
+                    "simulated": bool(body.get("simulated", True)),
+                },
+            )
+            capture = capture_response["capture"]
+            expected_output = str(body.get("expected_output") or default_expected_output_for_mode(mode))
+            mission_response = self.create_field_station_mission(
+                workspace_id=workspace_id,
+                source="field_station_button_bridge",
+                mode=mode,
+                goal=text,
+                capture_id=str(capture["id"]),
+                permission_lane=str(body.get("permission_lane") or "read-only"),
+                expected_output=expected_output,
+            )
+            job_response = self.create_field_station_job(
+                workspace_id=workspace_id,
+                mission_id=str(mission_response["mission"]["id"]),
+                provider=str(body.get("provider") or "codex"),
+            )
+            event = self._field_station_store(workspace_id).record_station_event(
+                workspace_id=workspace_id,
+                event_type="station.button.capture",
+                payload={
+                    "capture_id": capture["id"],
+                    "mission_id": mission_response["mission"]["id"],
+                    "job_id": job_response["job"]["id"],
+                },
+            )
+            self._emit_event(
+                "field-station.updated",
+                {
+                    "workspace_id": workspace_id,
+                    "kind": "station-button-capture",
+                    "capture_id": capture["id"],
+                    "mission_id": mission_response["mission"]["id"],
+                    "job_id": job_response["job"]["id"],
+                },
+            )
+            return {
+                "event": event,
+                "capture": capture,
+                "mission": mission_response["mission"],
+                "job": job_response["job"],
+                "snapshot": self.get_field_station_snapshot(workspace_id),
+            }
+        if clean_event_type == "camera.snapshot":
+            mode = normalize_field_station_mode(str(body.get("mode") or "maker"))
+            text = str(body.get("text") or "").strip() or "Camera snapshot captured for Alcove Field Station."
+            attachments: list[dict[str, object]] = []
+            data_url = str(body.get("data_url") or "").strip()
+            if data_url:
+                asset_response = self.create_field_station_capture_asset(
+                    workspace_id=workspace_id,
+                    data_url=data_url,
+                    file_name=str(body.get("file_name") or "camera-snapshot.png"),
+                    label=str(body.get("label") or "camera snapshot"),
+                    source="camera",
+                    metadata={
+                        "bridge_event_type": clean_event_type,
+                        "simulated": bool(body.get("simulated", False)),
+                    },
+                )
+                attachments.append(dict(asset_response["attachment"]))
+            capture_response = self.create_field_station_capture(
+                workspace_id=workspace_id,
+                mode=mode,
+                source="camera",
+                text=text,
+                attachments=attachments,
+                metadata={
+                    "bridge_event_type": clean_event_type,
+                    "trigger": "camera",
+                    "simulated": bool(body.get("simulated", False)),
+                },
+            )
+            capture = capture_response["capture"]
+            job_payload: dict[str, object] | None = None
+            if bool(body.get("queue_job", False)):
+                expected_output = str(body.get("expected_output") or default_expected_output_for_mode(mode))
+                mission_response = self.create_field_station_mission(
+                    workspace_id=workspace_id,
+                    source="field_station_camera_bridge",
+                    mode=mode,
+                    goal=text,
+                    capture_id=str(capture["id"]),
+                    permission_lane=str(body.get("permission_lane") or "read-only"),
+                    expected_output=expected_output,
+                )
+                job_response = self.create_field_station_job(
+                    workspace_id=workspace_id,
+                    mission_id=str(mission_response["mission"]["id"]),
+                    provider=str(body.get("provider") or "codex"),
+                )
+                job_payload = {
+                    "mission": mission_response["mission"],
+                    "job": job_response["job"],
+                }
+            event = self._field_station_store(workspace_id).record_station_event(
+                workspace_id=workspace_id,
+                event_type="station.camera.snapshot",
+                payload={
+                    "capture_id": capture["id"],
+                    "attachment_count": len(attachments),
+                    **(job_payload or {}),
+                },
+            )
+            self._emit_event(
+                "field-station.updated",
+                {
+                    "workspace_id": workspace_id,
+                    "kind": "station-camera-snapshot",
+                    "capture_id": capture["id"],
+                    "attachment_count": len(attachments),
+                },
+            )
+            return {
+                "event": event,
+                "capture": capture,
+                **(job_payload or {}),
+                "snapshot": self.get_field_station_snapshot(workspace_id),
+            }
+        event = self._field_station_store(workspace_id).record_station_event(
+            workspace_id=workspace_id,
+            event_type=f"station.{clean_event_type or 'event'}",
+            payload=body,
+        )
+        self._emit_event(
+            "field-station.updated",
+            {
+                "workspace_id": workspace_id,
+                "kind": "station-event",
+                "event_type": event["type"],
+            },
+        )
+        return {"event": event, "snapshot": self.get_field_station_snapshot(workspace_id)}
+
     def refresh_studio_preview(self, workspace_id: str) -> dict[str, object]:
         controller = self._controller(workspace_id)
         if not self._is_studio_workspace_kind(controller.state.workspace_kind):
@@ -448,7 +977,8 @@ class AgentRunnerService:
             )
             return payload
         repo_path = self._workspace_repo_path(workspace_id)
-        self._prepare_studio_preview(workspace_id, repo_path)
+        if not self._refresh_managed_static_studio_preview(workspace_id, repo_path):
+            self._prepare_studio_preview(workspace_id, repo_path)
         preview_relative_path = self._studio_entry_relative_path(workspace_id)
         preview_state = "ready" if (repo_path / preview_relative_path).exists() else "error"
         controller.set_workspace_profile(
@@ -2368,7 +2898,16 @@ class AgentRunnerService:
             return store.workflow_file(relative_path)
 
     def _is_studio_workspace_kind(self, workspace_kind: str | None) -> bool:
-        return str(workspace_kind or "").startswith("studio_")
+        return str(workspace_kind or "") in STUDIO_KIND_LABELS
+
+    def _require_field_station_workspace(self, workspace_id: str) -> WorkspaceConversationController:
+        controller = self._controller(workspace_id)
+        if controller.state.workspace_kind != "field_station":
+            raise ValueError("Workspace is not an Alcove Field Station workspace.")
+        return controller
+
+    def _field_station_store(self, workspace_id: str) -> FieldStationOrchestrationStore:
+        return FieldStationOrchestrationStore(self.conversation_store.workspace_dir(workspace_id))
 
     def _require_image_workspace(self, workspace_id: str) -> WorkspaceConversationController:
         controller = self._controller(workspace_id)
@@ -2581,6 +3120,29 @@ class AgentRunnerService:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "Build failed").strip()
             raise ValueError(f"Could not build Studio preview: {detail}")
+
+    def _refresh_managed_static_studio_preview(self, workspace_id: str, repo_path: Path) -> bool:
+        spec_path = repo_path / "alcove-studio.json"
+        if not spec_path.exists() or (repo_path / "package.json").exists():
+            return False
+        try:
+            spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(spec, dict) or spec.get("preview_mode") != "managed-static":
+            return False
+        controller = self._controller(workspace_id)
+        if not self._is_studio_workspace_kind(controller.state.workspace_kind):
+            return False
+        create_studio_project(
+            root=repo_path.parent,
+            workspace_id=workspace_id,
+            workspace_kind=controller.state.workspace_kind,
+            artifact_title=controller.state.artifact_title or controller.state.display_name or workspace_id,
+            template_kind=controller.state.template_kind,
+            theme_prompt=controller.state.theme_prompt,
+        )
+        return True
 
     def _package_scripts(self, package_json_path: Path) -> dict[str, object]:
         try:
@@ -2857,6 +3419,189 @@ class AgentRunnerService:
             "last_error": last_error,
         }
 
+    def _enqueue_field_station_job(self, workspace_id: str, job_id: str) -> None:
+        next_job: tuple[str, str] | None = None
+        with self._field_station_queue_lock:
+            self._pending_field_station_jobs.append((workspace_id, job_id))
+            if self._active_field_station_job is None:
+                next_job = self._pending_field_station_jobs.popleft()
+                self._active_field_station_job = next_job
+        if next_job is not None:
+            self._start_field_station_job(*next_job)
+
+    def _start_field_station_job(self, workspace_id: str, job_id: str) -> None:
+        worker = threading.Thread(
+            target=self._run_field_station_job,
+            args=(workspace_id, job_id),
+            daemon=True,
+        )
+        worker.start()
+
+    def _run_field_station_job(self, workspace_id: str, job_id: str) -> None:
+        store = self._field_station_store(workspace_id)
+        try:
+            job = store.update_job(job_id, status="running", started_at=timestamp_now())
+            self._emit_event(
+                "field-station.updated",
+                {
+                    "workspace_id": workspace_id,
+                    "kind": "job-started",
+                    "job_id": job_id,
+                    "mission_id": job.get("mission_id"),
+                },
+            )
+            time.sleep(0.16)
+            current = store.get_job(job_id)
+            if current.get("status") == "cancelled":
+                return
+            if current.get("provider") == "codex":
+                completed = self._complete_field_station_codex_job(
+                    store=store,
+                    workspace_id=workspace_id,
+                    job_id=job_id,
+                )
+            else:
+                completed = store.complete_fake_job(job_id)
+            self._emit_event(
+                "field-station.updated",
+                {
+                    "workspace_id": workspace_id,
+                    "kind": "job-needs-review",
+                    "job_id": job_id,
+                    "mission_id": completed.get("mission_id"),
+                    "review_id": completed.get("review_id"),
+                },
+            )
+        except Exception as exc:
+            try:
+                store.update_job(job_id, status="failed", error=str(exc))
+            except Exception:
+                pass
+            self._emit_event(
+                "field-station.updated",
+                {
+                    "workspace_id": workspace_id,
+                    "kind": "job-failed",
+                    "job_id": job_id,
+                    "error": str(exc),
+                },
+            )
+        finally:
+            self._finish_field_station_job(workspace_id, job_id)
+
+    def _complete_field_station_codex_job(
+        self,
+        *,
+        store: FieldStationOrchestrationStore,
+        workspace_id: str,
+        job_id: str,
+    ) -> dict[str, object]:
+        job = store.get_job(job_id)
+        mission = store.get_mission(str(job["mission_id"]))
+        controller = self._controller(workspace_id)
+        workspace_title = controller.state.display_name or workspace_id
+        prompt = build_field_station_worker_prompt(
+            workspace_id=workspace_id,
+            mission=mission,
+            job=job,
+            workspace_title=workspace_title,
+        )
+        model = self._default_model_for_provider(ProviderKind.CODEX)
+        response = self.phase_client.run(
+            ExecutionRequest(
+                provider=ProviderKind.CODEX,
+                codex_bin=self.app_settings.codex_bin,
+                model=model,
+                prompt=prompt,
+                schema=field_station_worker_schema(),
+                repo_path=self._workspace_repo_path(workspace_id),
+                extra_access_dir=self.app_settings.extra_access_dir,
+                ollama_host=self.app_settings.ollama_host,
+                dry_run=self.config.dry_run,
+                timeout_seconds=self.app_settings.phase_timeout_seconds,
+                phase_name="field-station-codex",
+            )
+        )
+        current = store.get_job(job_id)
+        if current.get("status") == "cancelled":
+            return current
+        payload = response.payload if isinstance(response.payload, dict) else {}
+        title = _payload_text(payload, "title") or _field_station_fallback_title(mission)
+        summary = _payload_text(payload, "summary") or f"Prepared Field Station artifact for: {_preview_for_payload(mission.get('goal'))}"
+        artifact_markdown = _payload_text(payload, "artifact_markdown") or _fallback_field_station_artifact(
+            title=title,
+            mission=mission,
+            dry_run=self.config.dry_run,
+        )
+        return store.complete_job_with_artifact(
+            job_id,
+            title=title,
+            summary=summary,
+            artifact_markdown=artifact_markdown,
+            evidence=_payload_string_list(payload, "evidence")
+            or [
+                f"Mode: {mission.get('mode')}",
+                f"Permission lane: {mission.get('permission_lane')}",
+                f"Worker model: {model}",
+            ],
+            risks=_payload_string_list(payload, "risks") or ["Review before treating this artifact as final."],
+            suggested_next_action=_payload_text(payload, "suggested_next_action")
+            or "Review the artifact, approve it if useful, then queue the next concrete follow-up.",
+            metadata={
+                "provider": "codex",
+                "model": model,
+                "dry_run": self.config.dry_run,
+                "return_code": response.return_code,
+            },
+        )
+
+    def _finish_field_station_job(self, workspace_id: str, job_id: str) -> None:
+        next_job: tuple[str, str] | None = None
+        with self._field_station_queue_lock:
+            if self._active_field_station_job == (workspace_id, job_id):
+                self._active_field_station_job = None
+            while self._active_field_station_job is None and self._pending_field_station_jobs:
+                candidate = self._pending_field_station_jobs.popleft()
+                try:
+                    candidate_job = self._field_station_store(candidate[0]).get_job(candidate[1])
+                except KeyError:
+                    continue
+                if candidate_job.get("status") == "cancelled":
+                    continue
+                next_job = candidate
+                self._active_field_station_job = next_job
+                break
+        if next_job is not None:
+            self._start_field_station_job(*next_job)
+
+    def _field_station_queue_payload(self, *, workspace_id: str | None = None) -> dict[str, object]:
+        with self._field_station_queue_lock:
+            active = self._active_field_station_job
+            queued = list(self._pending_field_station_jobs)
+        active_payload: dict[str, object] | None = None
+        if active is not None and (workspace_id is None or active[0] == workspace_id):
+            try:
+                active_payload = self._field_station_store(active[0]).get_job(active[1])
+                active_payload["queue_position"] = 0
+            except KeyError:
+                active_payload = None
+        queued_payloads: list[dict[str, object]] = []
+        for position, (candidate_workspace_id, candidate_job_id) in enumerate(queued, start=1):
+            if workspace_id and candidate_workspace_id != workspace_id:
+                continue
+            try:
+                job = self._field_station_store(candidate_workspace_id).get_job(candidate_job_id)
+            except KeyError:
+                continue
+            job["queue_position"] = position
+            queued_payloads.append(job)
+        return {
+            "active": active_payload,
+            "items": queued_payloads,
+            "count": len(queued_payloads),
+            "running": active_payload is not None,
+        }
+
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         listeners = list(self._event_listeners)
         with self._event_lock:
@@ -3125,6 +3870,405 @@ def _coerce_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _payload_text(payload: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    return str(value or "").strip() if value is not None else ""
+
+
+def _payload_string_list(payload: dict[str, object], key: str) -> list[str]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _field_station_fallback_title(mission: dict[str, object]) -> str:
+    mode = str(mission.get("mode") or "maker").replace("-", " ").replace("_", " ").title()
+    expected_output = str(mission.get("expected_output") or "artifact").replace("-", " ").replace("_", " ").title()
+    return f"{mode} {expected_output}"
+
+
+def _preview_for_payload(value: object, *, limit: int = 90) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 3)].rstrip()}..."
+
+
+def _fallback_field_station_artifact(
+    *,
+    title: str,
+    mission: dict[str, object],
+    dry_run: bool,
+) -> str:
+    status_note = (
+        "The Codex worker was run in dry-run mode, so Alcove created this fallback artifact without calling a model."
+        if dry_run
+        else "The worker did not return artifact markdown, so Alcove created this fallback artifact."
+    )
+    lines = [
+        f"# {title}",
+        "",
+        "## Capture",
+        "",
+        str(mission.get("goal") or "").strip() or "No mission goal was provided.",
+        "",
+        "## Mode",
+        "",
+        f"- Mode: {mission.get('mode')}",
+        f"- Permission lane: {mission.get('permission_lane')}",
+        f"- Expected output: {mission.get('expected_output')}",
+    ]
+    attachment_lines = _field_station_mission_attachment_lines(mission)
+    if attachment_lines:
+        lines.extend(["", "## Attachments", "", *attachment_lines])
+    briefing_lines = _field_station_mission_briefing_lines(mission)
+    if briefing_lines:
+        lines.extend(["", "## Briefing Sources", "", *briefing_lines])
+    lines.extend(
+        [
+            "",
+            "## Next Step",
+            "",
+            "Review this fallback, then rerun the job with the model worker enabled if you need a richer artifact.",
+            "",
+            "## Note",
+            "",
+            status_note,
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _field_station_mission_attachment_lines(mission: dict[str, object]) -> list[str]:
+    capture = mission.get("capture_snapshot") if isinstance(mission.get("capture_snapshot"), dict) else {}
+    attachments = capture.get("attachments") if isinstance(capture.get("attachments"), list) else []
+    lines: list[str] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        label = str(attachment.get("label") or attachment.get("kind") or "attachment").strip()
+        mime_type = str(attachment.get("mime_type") or "").strip()
+        path = str(attachment.get("path") or "").strip()
+        detail = " · ".join(item for item in [mime_type, path] if item)
+        lines.append(f"- {label}{f' ({detail})' if detail else ''}")
+    return lines
+
+
+def _field_station_mission_briefing_lines(mission: dict[str, object]) -> list[str]:
+    capture = mission.get("capture_snapshot") if isinstance(mission.get("capture_snapshot"), dict) else {}
+    metadata = capture.get("metadata") if isinstance(capture.get("metadata"), dict) else {}
+    sources = metadata.get("briefing_sources") if isinstance(metadata.get("briefing_sources"), list) else []
+    return _field_station_briefing_source_markdown_lines([dict(source) for source in sources if isinstance(source, dict)])
+
+
+def _field_station_station_payload(*, snapshot: dict[str, object], queue: dict[str, object]) -> dict[str, object]:
+    jobs = _snapshot_list(snapshot.get("jobs"))
+    reviews = _snapshot_list(snapshot.get("reviews"))
+    events = _snapshot_list(snapshot.get("events"))
+    pending_reviews = [review for review in reviews if review.get("status") == "pending"]
+    running_jobs = [job for job in jobs if job.get("status") in {"queued", "running", "needs_approval"}]
+    failed_jobs = [job for job in jobs if job.get("status") == "failed"]
+    if running_jobs or queue.get("running"):
+        state = "working"
+        label = "Working"
+        led = "thinking"
+    elif pending_reviews:
+        state = "needs-review"
+        label = "Needs review"
+        led = "approval"
+    elif failed_jobs:
+        state = "error"
+        label = "Needs help"
+        led = "error"
+    elif any(job.get("status") == "succeeded" for job in jobs):
+        state = "done"
+        label = "Done"
+        led = "complete"
+    else:
+        state = "ready"
+        label = "Ready"
+        led = "idle"
+    last_button_event = next((event for event in reversed(events) if str(event.get("type") or "").startswith("station.button")), None)
+    last_printer_event = next((event for event in reversed(events) if str(event.get("type") or "").startswith("station.printer")), None)
+    return {
+        "state": state,
+        "label": label,
+        "services": [
+            {
+                "id": "button",
+                "label": "button",
+                "state": "ready",
+                "detail": "capture bridge",
+                "last_event_at": last_button_event.get("created_at") if last_button_event else None,
+            },
+            {
+                "id": "camera",
+                "label": "camera",
+                "state": "ready",
+                "detail": "image capture",
+                "last_event_at": None,
+            },
+            {
+                "id": "mic",
+                "label": "mic",
+                "state": "browser",
+                "detail": "diagnostic capture",
+                "last_event_at": None,
+            },
+            {
+                "id": "briefing",
+                "label": "briefing",
+                "state": "ready",
+                "detail": "read-only adapters",
+                "last_event_at": None,
+            },
+            {
+                "id": "led",
+                "label": "LED",
+                "state": led,
+                "detail": label,
+                "last_event_at": events[-1].get("created_at") if events else None,
+            },
+            {
+                "id": "printer",
+                "label": "printer",
+                "state": "stub",
+                "detail": "approved artifacts later",
+                "last_event_at": last_printer_event.get("created_at") if last_printer_event else None,
+            },
+        ],
+        "contracts": {
+            "button.capture": "/api/field-station/station-events",
+            "camera.snapshot": "/api/field-station/station-events",
+            "printer.print": "/api/field-station/station-events",
+            "led.set": "/api/field-station/station-events",
+        },
+    }
+
+
+def _field_station_library_payload(snapshot: dict[str, object]) -> dict[str, object]:
+    captures = _snapshot_list(snapshot.get("captures"))
+    reviews = _snapshot_list(snapshot.get("reviews"))
+    recent_captures = [_field_station_capture_payload(capture) for capture in reversed(captures[-8:])]
+    artifacts: list[dict[str, object]] = []
+    for review in reversed(reviews[-10:]):
+        artifact_paths = review.get("artifact_paths") if isinstance(review.get("artifact_paths"), list) else []
+        artifacts.append(
+            {
+                "review_id": review.get("id"),
+                "title": review.get("title"),
+                "summary": review.get("summary"),
+                "status": review.get("status"),
+                "created_at": review.get("created_at"),
+                "artifact_path": artifact_paths[0] if artifact_paths else None,
+            }
+        )
+    return {
+        "captures": recent_captures,
+        "artifacts": artifacts,
+    }
+
+
+def _field_station_capture_payload(capture: dict[str, object]) -> dict[str, object]:
+    payload = dict(capture)
+    attachments = capture.get("attachments") if isinstance(capture.get("attachments"), list) else []
+    workspace_id = str(capture.get("workspace_id") or "")
+    payload["attachments"] = [
+        _field_station_attachment_payload(attachment, workspace_id=workspace_id)
+        for attachment in attachments
+        if isinstance(attachment, dict)
+    ]
+    return payload
+
+
+def _field_station_attachment_payload(attachment: dict[str, object], *, workspace_id: str) -> dict[str, object]:
+    payload = dict(attachment)
+    path = str(payload.get("path") or "").strip()
+    if path:
+        payload["url"] = f"/api/field-station/capture-assets?workspace_id={workspace_id}&path={path}"
+    return payload
+
+
+def _field_station_briefing_sources_payload(workspace_id: str, snapshot: dict[str, object]) -> list[dict[str, object]]:
+    persisted = [
+        _field_station_briefing_source_payload(source)
+        for source in _snapshot_list(snapshot.get("briefing_sources"))
+    ]
+    by_id: dict[str, dict[str, object]] = {
+        str(source.get("id") or ""): source
+        for source in _default_field_station_briefing_sources(workspace_id)
+    }
+    for source in persisted:
+        by_id[str(source.get("id") or "")] = source
+    return [source for source_id, source in by_id.items() if source_id]
+
+
+def _field_station_owner_briefing_payload(workspace_id: str, snapshot: dict[str, object]) -> dict[str, object]:
+    sources = _field_station_briefing_sources_payload(workspace_id, snapshot)
+    return {
+        "title": "Owner briefing",
+        "permission_lane": "read-only",
+        "approval_required": True,
+        "can_send_email": False,
+        "can_refund": False,
+        "can_update_orders": False,
+        "can_update_calendar": False,
+        "sources": sources,
+        "source_count": len(sources),
+        "default_note": "What needs Sky's attention today?",
+    }
+
+
+def _field_station_briefing_source_payload(source: dict[str, object]) -> dict[str, object]:
+    sample_items = source.get("sample_items") if isinstance(source.get("sample_items"), list) else []
+    return {
+        "id": source.get("id"),
+        "workspace_id": source.get("workspace_id"),
+        "kind": source.get("kind") or "manual",
+        "label": source.get("label") or "Briefing source",
+        "status": source.get("status") or "ready",
+        "permission_lane": source.get("permission_lane") or "read-only",
+        "summary": source.get("summary") or "",
+        "sample_items": [dict(item) for item in sample_items if isinstance(item, dict)],
+        "metadata": source.get("metadata") if isinstance(source.get("metadata"), dict) else {},
+        "is_sample": bool(source.get("is_sample", False)),
+        "created_at": source.get("created_at"),
+        "updated_at": source.get("updated_at"),
+    }
+
+
+def _default_field_station_briefing_sources(workspace_id: str) -> list[dict[str, object]]:
+    now = "sample"
+    return [
+        {
+            "id": "sample_ck_customer_threads",
+            "workspace_id": workspace_id,
+            "kind": "gmail",
+            "label": "Customer threads",
+            "status": "ready",
+            "permission_lane": "read-only",
+            "summary": "Read-only inbox triage stub for Clementine Kids customer issues and reply drafts.",
+            "sample_items": [
+                {
+                    "title": "Replacement request needs a decision",
+                    "detail": "Customer reports a missing bow from a recent order; prepare a friendly draft and confirm replacement policy.",
+                    "urgency": "today",
+                },
+                {
+                    "title": "Sizing question can become FAQ",
+                    "detail": "Two similar questions mention toddler sizing; draft one reusable answer for review.",
+                    "urgency": "soon",
+                },
+                {
+                    "title": "Influencer follow-up is waiting",
+                    "detail": "Draft a concise check-in and flag whether payout/order context is missing.",
+                    "urgency": "low",
+                },
+            ],
+            "metadata": {"adapter": "sample-gmail", "live_actions": False},
+            "is_sample": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "sample_ck_orders",
+            "workspace_id": workspace_id,
+            "kind": "shopify",
+            "label": "Orders / replacements",
+            "status": "ready",
+            "permission_lane": "read-only",
+            "summary": "Read-only order snapshot stub for open replacement, refund, and fulfillment decisions.",
+            "sample_items": [
+                {
+                    "title": "One replacement likely needs approval",
+                    "detail": "Order context is sufficient to draft the customer reply, but no replacement order should be created automatically.",
+                    "urgency": "today",
+                },
+                {
+                    "title": "Refund request lacks photo/context",
+                    "detail": "Ask for the missing detail before recommending a refund path.",
+                    "urgency": "soon",
+                },
+            ],
+            "metadata": {"adapter": "sample-shopify", "live_actions": False},
+            "is_sample": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "sample_ck_inventory",
+            "workspace_id": workspace_id,
+            "kind": "inventory",
+            "label": "Inventory watch",
+            "status": "ready",
+            "permission_lane": "read-only",
+            "summary": "Read-only inventory note stub for low-stock and owner-attention questions.",
+            "sample_items": [
+                {
+                    "title": "Low stock risk",
+                    "detail": "A seasonal style looks close to reorder threshold; confirm actual units before making a buy decision.",
+                    "urgency": "soon",
+                },
+                {
+                    "title": "Bundle component mismatch",
+                    "detail": "One bundle may be limited by a smaller component count; ask whether to pause or substitute.",
+                    "urgency": "today",
+                },
+            ],
+            "metadata": {"adapter": "sample-inventory", "live_actions": False},
+            "is_sample": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+
+
+def _select_field_station_briefing_sources(
+    sources: list[dict[str, object]],
+    source_ids: list[object] | None,
+) -> list[dict[str, object]]:
+    requested = {str(source_id).strip() for source_id in source_ids or [] if str(source_id).strip()}
+    if not requested:
+        return sources
+    return [source for source in sources if str(source.get("id") or "") in requested]
+
+
+def _field_station_briefing_context(sources: list[dict[str, object]]) -> str:
+    lines = ["Read-only sources selected:"]
+    lines.extend(_field_station_briefing_source_markdown_lines(sources))
+    lines.append("")
+    lines.append("Approval boundary: summarize, draft, recommend, and flag owner decisions only.")
+    return "\n".join(lines)
+
+
+def _field_station_briefing_source_markdown_lines(sources: list[dict[str, object]]) -> list[str]:
+    lines: list[str] = []
+    for source in sources:
+        label = str(source.get("label") or "Briefing source").strip()
+        kind = str(source.get("kind") or "manual").strip()
+        lane = str(source.get("permission_lane") or "read-only").strip()
+        summary = str(source.get("summary") or "").strip()
+        lines.append(f"- {label} ({kind}, {lane}): {summary or 'No summary provided.'}")
+        sample_items = source.get("sample_items")
+        if isinstance(sample_items, list):
+            for item in sample_items[:5]:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "Briefing item").strip()
+                detail = str(item.get("detail") or "").strip()
+                urgency = str(item.get("urgency") or "").strip()
+                item_detail = " | ".join(part for part in [f"urgency: {urgency}" if urgency else "", detail] if part)
+                lines.append(f"  - {title}{f' - {item_detail}' if item_detail else ''}")
+    return lines
+
+
+def _snapshot_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _normalize_zimage_lora_name(value: object | None) -> str | None:

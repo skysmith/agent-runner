@@ -10,6 +10,7 @@ import time
 from threading import Event
 from pathlib import Path
 
+import agent_runner.http_api as http_api
 from agent_runner.codex_client import CodexExecResult
 from agent_runner.http_api import MAX_JSON_BODY_BYTES, create_server
 from agent_runner.image_workflow import MockImageTo3DProvider, MockImageToVideoProvider, default_mock_provider
@@ -620,7 +621,7 @@ def test_studio_game_endpoints_create_preview_and_publish(tmp_path: Path) -> Non
         server.server_close()
 
 
-def test_generic_studio_endpoints_create_web_data_and_docs_workspaces(tmp_path: Path) -> None:
+def test_generic_studio_endpoints_create_station_web_data_and_docs_workspaces(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     service = _make_service(tmp_path)
     server = create_server(service, "127.0.0.1", 0)
@@ -643,6 +644,18 @@ def test_generic_studio_endpoints_create_web_data_and_docs_workspaces(tmp_path: 
         assert "Game Studio" not in web_html
         assert "Web Studio" in web_html
 
+        station = _post_json(
+            f"{base}/api/studio/workspaces",
+            {
+                "workspace_kind": "field_station",
+                "artifact_title": "Garage Console",
+                "template_kind": "magic-button",
+            },
+        )["workspace"]
+        station_html = urllib.request.urlopen(f"{base}{station['preview_url']}").read().decode("utf-8")
+        assert station["workspace_kind"] == "field_station"
+        assert "Field Station" in station_html
+
         data = _post_json(
             f"{base}/api/studio/workspaces",
             {
@@ -664,6 +677,158 @@ def test_generic_studio_endpoints_create_web_data_and_docs_workspaces(tmp_path: 
         )["workspace"]
         docs_html = urllib.request.urlopen(f"{base}{docs['preview_url']}").read().decode("utf-8")
         assert "Docs Studio" in docs_html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_field_station_orchestration_api_queues_fake_job_and_approves_review(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        workspace = _post_json(
+            f"{base}/api/studio/workspaces",
+            {
+                "workspace_kind": "field_station",
+                "artifact_title": "Garage Console",
+                "template_kind": "magic-button",
+            },
+            expected_status=201,
+        )["workspace"]
+        workspace_id = str(workspace["id"])
+        assert _get_json(f"{base}/api/field-station/snapshot?workspace_id={workspace_id}")["jobs"] == []
+        briefing_sources = _get_json(f"{base}/api/field-station/briefing-sources?workspace_id={workspace_id}")
+        assert briefing_sources["owner_briefing"]["permission_lane"] == "read-only"
+        assert any(source["id"] == "sample_ck_customer_threads" for source in briefing_sources["sources"])
+
+        capture = _post_json(
+            f"{base}/api/field-station/captures",
+            {
+                "workspace_id": workspace_id,
+                "text": "Make a field station shopping checklist.",
+                "source": "typed",
+                "mode": "maker",
+                "metadata": {"voice_state": "ready"},
+            },
+            expected_status=201,
+        )["capture"]
+        asset = _post_json(
+            f"{base}/api/field-station/capture-assets",
+            {
+                "workspace_id": workspace_id,
+                "data_url": "data:image/png;base64,aGVsbG8=",
+                "file_name": "parts.png",
+                "label": "parts photo",
+                "source": "upload",
+            },
+            expected_status=201,
+        )["attachment"]
+        asset_bytes = urllib.request.urlopen(
+            f"{base}/api/field-station/capture-assets?workspace_id={workspace_id}&path={urllib.parse.quote(asset['path'])}"
+        ).read()
+        assert asset_bytes == b"hello"
+        mission = _post_json(
+            f"{base}/api/field-station/missions",
+            {
+                "workspace_id": workspace_id,
+                "goal": "Make a field station shopping checklist.",
+                "mode": "maker",
+                "permission_lane": "read-only",
+                "expected_output": "project_plan",
+                "capture_id": capture["id"],
+            },
+            expected_status=201,
+        )["mission"]
+        assert mission["capture_id"] == capture["id"]
+        job = _post_json(
+            f"{base}/api/field-station/jobs",
+            {
+                "workspace_id": workspace_id,
+                "mission_id": mission["id"],
+                "provider": "fake",
+            },
+            expected_status=201,
+        )["job"]
+        assert job["status"] == "queued"
+
+        _wait_for(lambda: _get_json(f"{base}/api/workspaces/{workspace_id}/field-station")["reviews"])
+        snapshot = _get_json(f"{base}/api/workspaces/{workspace_id}/field-station")
+        review = snapshot["reviews"][0]
+        assert snapshot["jobs"][0]["status"] == "needs_review"
+        artifact = _get_json(
+            f"{base}/api/field-station/artifact?workspace_id={workspace_id}&path={urllib.parse.quote(review['artifact_paths'][0])}"
+        )
+        assert "Make a field station shopping checklist" in artifact["content"]
+
+        approved = _post_json(
+            f"{base}/api/field-station/reviews/{review['id']}/approve",
+            {"workspace_id": workspace_id},
+        )
+        assert approved["review"]["status"] == "approved"
+        assert approved["snapshot"]["jobs"][0]["status"] == "succeeded"
+
+        bridge = _post_json(
+            f"{base}/api/field-station/station-events",
+            {
+                "workspace_id": workspace_id,
+                "event_type": "button.capture",
+                "payload": {
+                    "mode": "maker",
+                    "text": "Bridge button should queue a capture.",
+                    "provider": "fake",
+                    "simulated": True,
+                },
+            },
+            expected_status=201,
+        )
+        assert bridge["capture"]["source"] == "physical_button"
+        assert bridge["mission"]["capture_id"] == bridge["capture"]["id"]
+        camera = _post_json(
+            f"{base}/api/field-station/station-events",
+            {
+                "workspace_id": workspace_id,
+                "event_type": "camera.snapshot",
+                "payload": {
+                    "mode": "maker",
+                    "text": "Camera captured the desk parts.",
+                    "data_url": "data:image/png;base64,aGVsbG8=",
+                    "simulated": True,
+                },
+            },
+            expected_status=201,
+        )
+        assert camera["capture"]["source"] == "camera"
+        assert camera["capture"]["attachments"][0]["mime_type"] == "image/png"
+
+        custom_source = _post_json(
+            f"{base}/api/field-station/briefing-sources",
+            {
+                "workspace_id": workspace_id,
+                "kind": "manual",
+                "label": "Owner notes",
+                "summary": "Read-only owner notes for today's customer follow-up.",
+                "sample_items": [{"title": "Draft a reply", "detail": "Human approval required.", "urgency": "today"}],
+            },
+            expected_status=201,
+        )["source"]
+        owner_briefing = _post_json(
+            f"{base}/api/field-station/owner-briefings",
+            {
+                "workspace_id": workspace_id,
+                "source_ids": ["sample_ck_customer_threads", custom_source["id"]],
+                "note": "Focus on owner decisions.",
+                "provider": "fake",
+            },
+            expected_status=201,
+        )
+        assert owner_briefing["capture"]["source"] == "owner_briefing"
+        assert owner_briefing["mission"]["expected_output"] == "owner_briefing"
+        assert owner_briefing["mission"]["permission_lane"] == "read-only"
+        assert len(owner_briefing["sources"]) == 2
     finally:
         server.shutdown()
         server.server_close()
@@ -1057,7 +1222,8 @@ def test_server_info_includes_local_token_when_repo_dirty(tmp_path: Path) -> Non
         server.server_close()
 
 
-def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default(tmp_path: Path) -> None:
+def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _init_git_repo(tmp_path)
     service = _make_service(tmp_path)
     server = create_server(service, "127.0.0.1", 0)
@@ -1069,9 +1235,128 @@ def test_connections_endpoint_reports_local_url_and_phone_unavailable_by_default
         assert payload["phone_enabled"] is False
         assert payload["phone_url"] is None
         assert payload["native_transcription_available"] is False
+        assert payload["realtime_voice_available"] is False
+        assert payload["realtime_voice_provider"] is None
+        assert payload["realtime_voice_model"] == "gpt-realtime"
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_realtime_client_secret_endpoint_requires_openai_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            _post_json(
+                f"{base}/api/field-station/realtime-client-secret",
+                {"workspace_id": "presence-qa-demo", "mode": "maker"},
+            )
+            raise AssertionError("Expected realtime client secret request to fail without OPENAI_API_KEY.")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+            payload = json.loads(exc.read().decode("utf-8"))
+            assert "OPENAI_API_KEY" in payload["detail"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_realtime_client_secret_endpoint_returns_ephemeral_payload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    _init_git_repo(tmp_path)
+    service = _make_service(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_client_secret(*, mode: str | None, current_text: str | None, repo_path: Path) -> dict[str, object]:
+        captured["mode"] = mode
+        captured["current_text"] = current_text
+        captured["repo_path"] = repo_path
+        return {
+            "provider": "openai",
+            "model": "gpt-realtime",
+            "voice": "marin",
+            "calls_url": "https://api.openai.com/v1/realtime/calls",
+            "client_secret": {"value": "ek_test", "expires_at": 123456},
+        }
+
+    monkeypatch.setattr("agent_runner.http_api._create_openai_realtime_client_secret", fake_client_secret)
+    server = create_server(service, "127.0.0.1", 0)
+    try:
+        _start(server)
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = _post_json(
+            f"{base}/api/field-station/realtime-client-secret",
+            {
+                "workspace_id": "presence-qa-demo",
+                "mode": "maker",
+                "current_text": "Build a tiny rover.",
+            },
+        )
+        assert payload["client_secret"]["value"] == "ek_test"
+        assert payload["calls_url"].endswith("/realtime/calls")
+        assert "sk-test" not in json.dumps(payload)
+        assert captured["mode"] == "maker"
+        assert captured["current_text"] == "Build a tiny rover."
+        assert captured["repo_path"] == service.config.repo_path
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_openai_realtime_client_secret_helper_posts_session_config(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ALCOVE_REALTIME_VOICE", "verse")
+    calls: list[tuple[urllib.request.Request, int]] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"value": "ek_test", "expires_at": 123456}).encode("utf-8")
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        calls.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(http_api.urllib.request, "urlopen", fake_urlopen)
+
+    payload = http_api._create_openai_realtime_client_secret(
+        mode="family",
+        current_text="Tell a story about this drawing.",
+        repo_path=tmp_path,
+    )
+
+    assert payload["client_secret"]["value"] == "ek_test"
+    assert payload["voice"] == "verse"
+    assert len(calls) == 1
+    request, timeout = calls[0]
+    assert timeout == 12
+    assert request.full_url == "https://api.openai.com/v1/realtime/client_secrets"
+    assert request.get_header("Authorization") == "Bearer sk-test"
+    request_payload = json.loads(request.data.decode("utf-8"))
+    session = request_payload["session"]
+    assert session["model"] == "gpt-realtime"
+    assert session["audio"]["output"]["voice"] == "verse"
+    assert session["audio"]["input"]["transcription"]["model"] == "gpt-4o-mini-transcribe"
+    assert session["tool_choice"] == "auto"
+    assert session["tools"][0]["name"] == "queue_alcove_job"
+    assert session["tools"][0]["parameters"]["required"] == ["goal"]
+    assert "Family mode" in session["instructions"]
+    assert "Default to English" in session["instructions"]
+    assert "Only switch languages" in session["instructions"]
+    assert "ask one short clarifying question" in session["instructions"]
+    assert "no random roleplay" in session["instructions"]
+    assert "queue_alcove_job" in session["instructions"]
+    assert "Tell a story about this drawing." in session["instructions"]
 
 
 def test_native_transcription_endpoint_uses_wrapper_callable(tmp_path: Path) -> None:

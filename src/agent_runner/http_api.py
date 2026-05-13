@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import ipaddress
 import json
 import mimetypes
+import os
 import traceback
 import uuid
 from email.parser import BytesParser
@@ -12,6 +14,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 import qrcode
@@ -30,8 +34,13 @@ from .web_ui import (
     render_workspaces,
 )
 
-MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+MAX_JSON_BODY_BYTES = 8 * 1024 * 1024
 MAX_MULTIPART_BODY_BYTES = 45 * 1024 * 1024
+OPENAI_REALTIME_CLIENT_SECRET_URL = "https://api.openai.com/v1/realtime/client_secrets"
+OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls"
+OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime"
+OPENAI_REALTIME_DEFAULT_VOICE = "marin"
+OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 
 
 class RequestBodyTooLargeError(ValueError):
@@ -69,6 +78,20 @@ def create_server(
         payload["native_transcription_provider"] = (
             "macos-wrapper" if native_transcriber is not None and loopback_client else None
         )
+        realtime_key_available = bool(_openai_api_key())
+        payload["realtime_voice_available"] = realtime_key_available and loopback_client
+        payload["realtime_voice_provider"] = "openai" if realtime_key_available and loopback_client else None
+        payload["realtime_voice_model"] = _openai_realtime_model()
+        payload["realtime_voice_calls_url"] = (
+            OPENAI_REALTIME_CALLS_URL if realtime_key_available and loopback_client else None
+        )
+        if not loopback_client:
+            realtime_reason = "Realtime voice is only available from this machine in the local prototype."
+        elif not realtime_key_available:
+            realtime_reason = "Set OPENAI_API_KEY to enable realtime voice."
+        else:
+            realtime_reason = "OpenAI Realtime voice is ready."
+        payload["realtime_voice_reason"] = realtime_reason
         return payload
 
     class CompanionHandler(BaseHTTPRequestHandler):
@@ -87,6 +110,40 @@ def create_server(
                 if path.startswith("/api/workspaces/") and path.endswith("/studio"):
                     workspace_id = _path_part(path, 2)
                     self._json_response(service.get_studio_workspace(workspace_id))
+                    return
+                if path.startswith("/api/workspaces/") and path.endswith("/field-station"):
+                    workspace_id = _path_part(path, 2)
+                    self._json_response(service.get_field_station_snapshot(workspace_id))
+                    return
+                if path == "/api/field-station/snapshot":
+                    self._json_response(
+                        service.get_field_station_snapshot(
+                            _required_query_text(query, "workspace_id"),
+                        )
+                    )
+                    return
+                if path == "/api/field-station/briefing-sources":
+                    self._json_response(
+                        service.list_field_station_briefing_sources(
+                            _required_query_text(query, "workspace_id"),
+                        )
+                    )
+                    return
+                if path == "/api/field-station/artifact":
+                    self._json_response(
+                        service.get_field_station_artifact(
+                            workspace_id=_required_query_text(query, "workspace_id"),
+                            artifact_path=_required_query_text(query, "path"),
+                        )
+                    )
+                    return
+                if path == "/api/field-station/capture-assets":
+                    self._file_response(
+                        service.field_station_capture_asset_file(
+                            workspace_id=_required_query_text(query, "workspace_id"),
+                            asset_path=_required_query_text(query, "path"),
+                        )
+                    )
                     return
                 if path.startswith("/api/workspaces/") and path.endswith("/image-workflow"):
                     workspace_id = _path_part(path, 2)
@@ -294,6 +351,118 @@ def create_server(
                             theme_prompt=_body_text(body, "theme_prompt"),
                         ),
                         status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/missions":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_mission(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            conversation_id=_body_text(body, "conversation_id"),
+                            source=_body_text(body, "source"),
+                            mode=_body_text(body, "mode"),
+                            goal=_required_body_text(body, "goal"),
+                            target=_body_text(body, "target"),
+                            permission_lane=_body_text(body, "permission_lane"),
+                            expected_output=_body_text(body, "expected_output"),
+                            requires_approval=bool(body.get("requires_approval", True)),
+                            capture_id=_body_text(body, "capture_id"),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/captures":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_capture(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            mode=_body_text(body, "mode"),
+                            source=_body_text(body, "source"),
+                            text=_required_body_text(body, "text"),
+                            attachments=body.get("attachments") if isinstance(body.get("attachments"), list) else None,
+                            metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/capture-assets":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_capture_asset(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            data_url=_required_body_text(body, "data_url"),
+                            file_name=_body_text(body, "file_name"),
+                            label=_body_text(body, "label"),
+                            source=_body_text(body, "source"),
+                            metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/briefing-sources":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_briefing_source(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            kind=_body_text(body, "kind"),
+                            label=_required_body_text(body, "label"),
+                            summary=_body_text(body, "summary"),
+                            sample_items=body.get("sample_items") if isinstance(body.get("sample_items"), list) else None,
+                            metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/owner-briefings":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_owner_briefing(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            source_ids=body.get("source_ids") if isinstance(body.get("source_ids"), list) else None,
+                            note=_body_text(body, "note"),
+                            provider=_body_text(body, "provider"),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path == "/api/field-station/jobs":
+                    body = self._json_body()
+                    self._json_response(
+                        service.create_field_station_job(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            mission_id=_required_body_text(body, "mission_id"),
+                            provider=_body_text(body, "provider"),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path.startswith("/api/field-station/jobs/") and path.endswith("/cancel"):
+                    body = self._json_body()
+                    self._json_response(
+                        service.cancel_field_station_job(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            job_id=_path_part(path, 3),
+                        )
+                    )
+                    return
+                if path == "/api/field-station/station-events":
+                    body = self._json_body()
+                    self._json_response(
+                        service.trigger_field_station_station_event(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            event_type=_required_body_text(body, "event_type"),
+                            payload=body.get("payload") if isinstance(body.get("payload"), dict) else {},
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if path.startswith("/api/field-station/reviews/") and path.endswith("/approve"):
+                    body = self._json_body()
+                    self._json_response(
+                        service.approve_field_station_review(
+                            workspace_id=_required_body_text(body, "workspace_id"),
+                            review_id=_path_part(path, 3),
+                        )
                     )
                     return
                 if path == "/api/studio/games":
@@ -555,6 +724,22 @@ def create_server(
                         return
                     body = self._json_body()
                     self._json_response(native_transcriber(_body_text(body, "locale")))
+                    return
+                if path == "/api/field-station/realtime-client-secret":
+                    if not self._is_loopback_client():
+                        self._error_response(HTTPStatus.FORBIDDEN, "Realtime voice is only available from this machine.")
+                        return
+                    if not _openai_api_key():
+                        self._error_response(HTTPStatus.CONFLICT, "Set OPENAI_API_KEY to enable realtime voice.")
+                        return
+                    body = self._json_body()
+                    self._json_response(
+                        _create_openai_realtime_client_secret(
+                            mode=_body_text(body, "mode"),
+                            current_text=_body_text(body, "current_text"),
+                            repo_path=service.config.repo_path,
+                        )
+                    )
                     return
                 if path == "/api/runs/stop-safely":
                     self._json_response(service.stop_run())
@@ -961,6 +1146,13 @@ def _query_text(query: dict[str, list[str]], key: str) -> str | None:
     return text or None
 
 
+def _required_query_text(query: dict[str, list[str]], key: str) -> str:
+    text = _query_text(query, key)
+    if not text:
+        raise ValueError(f"Missing required query parameter: {key}.")
+    return text
+
+
 def _query_int(query: dict[str, list[str]], key: str, *, default: int) -> int:
     text = _query_text(query, key)
     if not text:
@@ -1011,6 +1203,183 @@ def _required_body_text(body: dict[str, Any], key: str) -> str:
     if not text:
         raise ValueError(f"Missing required field: {key}.")
     return text
+
+
+def _openai_api_key() -> str | None:
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    return key or None
+
+
+def _openai_realtime_model() -> str:
+    return os.environ.get("ALCOVE_REALTIME_MODEL", "").strip() or OPENAI_REALTIME_DEFAULT_MODEL
+
+
+def _openai_realtime_voice() -> str:
+    return os.environ.get("ALCOVE_REALTIME_VOICE", "").strip() or OPENAI_REALTIME_DEFAULT_VOICE
+
+
+def _openai_realtime_transcription_model() -> str:
+    return (
+        os.environ.get("ALCOVE_REALTIME_TRANSCRIPTION_MODEL", "").strip()
+        or OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    )
+
+
+def _create_openai_realtime_client_secret(
+    *,
+    mode: str | None,
+    current_text: str | None,
+    repo_path: Path,
+) -> dict[str, Any]:
+    api_key = _openai_api_key()
+    if not api_key:
+        raise RuntimeError("Set OPENAI_API_KEY to enable realtime voice.")
+
+    model = _openai_realtime_model()
+    voice = _openai_realtime_voice()
+    transcription_model = _openai_realtime_transcription_model()
+    session_config: dict[str, Any] = {
+        "type": "realtime",
+        "model": model,
+        "instructions": _field_station_realtime_instructions(mode=mode, current_text=current_text),
+        "audio": {
+            "output": {"voice": voice},
+            "input": {
+                "transcription": {"model": transcription_model},
+                "turn_detection": {"type": "server_vad", "create_response": True},
+            },
+        },
+        "output_modalities": ["audio"],
+        "tools": [_field_station_realtime_queue_tool()],
+        "tool_choice": "auto",
+    }
+    request_body = json.dumps({"session": session_config}).encode("utf-8")
+    request = urllib.request.Request(
+        OPENAI_REALTIME_CLIENT_SECRET_URL,
+        data=request_body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "OpenAI-Safety-Identifier": _privacy_preserving_safety_identifier(repo_path),
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"OpenAI Realtime client secret failed: {detail or exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"OpenAI Realtime client secret failed: {exc.reason}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("OpenAI Realtime client secret returned an invalid payload.")
+    client_secret = _normalize_openai_client_secret_payload(payload)
+    return {
+        "provider": "openai",
+        "model": model,
+        "voice": voice,
+        "transcription_model": transcription_model,
+        "calls_url": OPENAI_REALTIME_CALLS_URL,
+        "client_secret": client_secret,
+    }
+
+
+def _normalize_openai_client_secret_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    value = str(payload.get("value") or "").strip()
+    expires_at = payload.get("expires_at")
+    if not value:
+        session = payload.get("session")
+        if isinstance(session, dict):
+            secret = session.get("client_secret")
+            if isinstance(secret, dict):
+                value = str(secret.get("value") or "").strip()
+                expires_at = expires_at or secret.get("expires_at")
+    if not value:
+        raise RuntimeError("OpenAI Realtime client secret response did not include a token value.")
+    return {
+        "value": value,
+        "expires_at": expires_at,
+    }
+
+
+def _privacy_preserving_safety_identifier(repo_path: Path) -> str:
+    raw = f"alcove-field-station:{repo_path.resolve()}".encode("utf-8", errors="replace")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _field_station_realtime_queue_tool() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": "queue_alcove_job",
+        "description": (
+            "Queue a background Alcove/Codex task from the live Field Station conversation. "
+            "Use this when the human asks you to capture, make, build, draft, prepare, summarize, "
+            "turn this into a handoff, create a story, create a plan, or otherwise start work that can run "
+            "while the voice conversation continues."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The concrete task or artifact Alcove should create.",
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "The best Field Station mode for the task.",
+                    "enum": ["maker", "family", "business", "real-estate", "demo", "codex"],
+                },
+                "expected_output": {
+                    "type": "string",
+                    "description": "The artifact shape the queued job should produce.",
+                    "enum": [
+                        "project_plan",
+                        "kid_story",
+                        "owner_briefing",
+                        "transaction_brief",
+                        "client_demo_explanation",
+                        "codex_handoff",
+                        "artifact",
+                    ],
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "A short plain-language summary to show in the station job queue.",
+                },
+            },
+            "required": ["goal"],
+        },
+    }
+
+
+def _field_station_realtime_instructions(*, mode: str | None, current_text: str | None) -> str:
+    clean_mode = (mode or "maker").strip().lower()
+    mode_guidance = {
+        "family": "You are in Family mode. Be warm, imaginative, safe, and short. Ask one playful question when useful.",
+        "maker": "You are in Maker mode. Help turn messy physical-project ideas into doable next steps.",
+        "business": "You are in Business mode. Draft and summarize only; remind the human to approve external actions.",
+        "real-estate": "You are in Real Estate mode. Help with checklists, deadlines, explanations, and client-update drafts.",
+        "demo": "You are in Demo mode. Explain practical AI workflows in plain, local-business language.",
+        "codex": "You are in Codex mode. Convert rough intent into precise build handoffs and implementation steps.",
+    }.get(clean_mode, "Help turn messy real-world input into a useful next action.")
+    text_hint = (current_text or "").strip()
+    if text_hint:
+        text_hint = f"\nCurrent composer text for context: {text_hint[:900]}"
+    return (
+        "You are Alcove, a calm physical AI presence in a tabletop field station. "
+        "This is live voice, so speak conversationally and keep responses brief unless asked for depth. "
+        "At any moment, show one invitation, one state, and one next action. "
+        "Default to English. Only switch languages when the human clearly asks you to. "
+        "Do not guess what the human is making from ambiguous noise or partial words. If the intent is unclear, "
+        "ask one short clarifying question before naming the project or proposing specifics. "
+        "Be a curious kid-friendly robot helper: playful, grounded, and calm, with no random roleplay or scene invention. "
+        "You can suggest, draft, summarize, and prepare, but the human approves anything external, client-facing, "
+        "financial, or hardware-moving. When the human asks you to make, capture, queue, prepare, draft, build, "
+        "or turn the current thought into an artifact, call queue_alcove_job. After queueing, briefly confirm "
+        "that the job is running and keep the conversation available. "
+        f"{mode_guidance}{text_hint}"
+    )
 
 
 def _merge_content_and_attachments(*, base_content: str, attachment_lines: list[str]) -> str:

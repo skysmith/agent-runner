@@ -85,7 +85,7 @@ During the transition, the older `agent-runner` command name and `./agent-runner
 
 ## Product Shape
 
-Alcove now has two closely related product patterns:
+Alcove now has three closely related product patterns:
 
 - **Finance Drawer**
   An embedded, page-aware assistant surface that lives inside another product and understands the current route, filters, entities, and visible data.
@@ -93,9 +93,17 @@ Alcove now has two closely related product patterns:
 - **Studio modes**
   Workspace-driven creation surfaces where the right pane shows a live artifact and the left pane steers it through a durable chat.
 
+- **Field Station**
+  A physical-first Alcove surface for the room: digital face, camera, mic, buttons, LEDs, optional printer, and a magic-button loop for turning messy real-world input into saved artifacts.
+
+As of 2026-05-13, `field_station` is a creatable workspace/surface with a friendly face/control preview, a capture-first magic-button flow, OpenAI Realtime voice when `OPENAI_API_KEY` is set, browser/native mic fallbacks, image/camera capture assets, read-only owner briefing adapters, face states, mode prompt packs, a Codex worker adapter, persisted job state, saved markdown artifacts, a review drawer, follow-up job queueing, a project library, station event polling, and a hardware bridge stub for button, LED, camera, and printer services. The fake worker remains available for safe demos while the default preview path now proves the real artifact loop.
+
+The Field Station UI should stay guided by one product rule: at any moment, Alcove should show one invitation, one state, and one next action. Details such as jobs, reviews, connectors, and hardware services should support that moment instead of taking over the console.
+
 The long-term studio family is:
 
 - `finance_drawer`
+- `field_station`
 - `studio_game`
 - `studio_web`
 - `studio_data`
@@ -237,7 +245,7 @@ Desktop and browser UI support:
 - one global active run at a time
 - one durable chat per workspace
 - `Clear Chat` to intentionally reset workspace context
-- local voice capture into the prompt box via the `Mic` button
+- local voice capture into the prompt box via the `Mic` button, including OpenAI Realtime WebRTC voice when `OPENAI_API_KEY` is available
 - a short preflight clarifying pass before loop runs when follow-up questions would help
 - `Stop Safely` to halt after the current phase and keep your workspace state
 - compact status indicator animation in the composer while runs are active
@@ -272,6 +280,16 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+Optional Realtime voice setup:
+
+```bash
+export OPENAI_API_KEY="..."
+export ALCOVE_REALTIME_MODEL="gpt-realtime"
+export ALCOVE_REALTIME_VOICE="marin"
+```
+
+The backend mints short-lived OpenAI Realtime client secrets for the local browser. The full API key stays on the Mac.
 
 ## Launch and packaging
 

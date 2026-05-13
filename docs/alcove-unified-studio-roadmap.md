@@ -1,7 +1,7 @@
 # Alcove Unified Studio Roadmap
 
-Updated: April 16, 2026  
-Repo: `/Users/sky/Documents/codex/lab/scratchpad/agent-runner-fresh-onboarding`
+Updated: May 12, 2026
+Repo: `/Users/sky/Documents/codex/lab/scratchpad/agent-runner-main-sync`
 
 ## Product summary
 
@@ -17,7 +17,7 @@ Alcove is strongest when the artifact is visible.
 
 ## Product families
 
-Alcove now has two closely related patterns.
+Alcove now has three closely related patterns.
 
 ### 1. Finance Drawer
 
@@ -44,6 +44,30 @@ Initial studio roadmap:
 
 These should all reuse the same platform ideas rather than becoming separate products with separate architectures.
 
+### 3. Field Station
+
+The physical-first surface for Alcove.
+
+- lives on a countertop station, cart, case, podium, or other room-scale body
+- uses a digital face, camera, microphone, buttons, LEDs, and optional printer to make Alcove legible in the room
+- starts with the magic-button loop: messy real-world input -> structured output -> saved artifact
+- should reuse Alcove workspaces, conversations, artifacts, Studio previews, and safety gates rather than becoming a second platform
+- preserves its own presence UI and physical controls instead of becoming a generic Studio skin
+
+Field Station interface rule:
+
+> At any moment, Alcove should show one invitation, one state, and one next action.
+
+That rule is how the console stays clean while remaining useful. The face, status, and primary control should carry the live moment; deeper details like jobs, reviews, connectors, services, and libraries should stay available without competing with the current invitation.
+
+The current prototype lives at:
+
+- `/Users/sky/Documents/codex/lab/scratchpad/alcove-field-station`
+
+The convergence plan lives at:
+
+- `/Users/sky/Documents/codex/lab/scratchpad/alcove-field-station/docs/alcove-convergence-plan.md`
+
 ## Current implementation status
 
 The roadmap has now moved from naming-only direction into a real baseline implementation.
@@ -62,6 +86,7 @@ The roadmap has now moved from naming-only direction into a real baseline implem
 - public web binds now require a password, so remote-serving defaults are harder to misuse
 - Image Studio now owns the native Alcove image workflow: prompt -> generate or upload -> choose a winner -> `Make 3D`
 - Video Studio now exists as an Alcove launch point instead of depending on a separate dashboard mental model
+- Field Station now owns the first orchestration slice: first-class text/voice/image capture records, OpenAI Realtime WebRTC voice behind a short-lived client-secret endpoint, saved capture assets, mission records, mode prompt packs, queued fake or Codex jobs, persisted markdown artifacts/review bundles, browser/native speech fallbacks, face states, station event polling, a review drawer, follow-up job actions, a project library, and hardware bridge stubs inside the face/control preview
 
 That means several roadmap items have moved from “define this pattern” into “polish and unify this pattern.”
 
@@ -95,12 +120,15 @@ Each studio should follow the same product rhythm:
 Conceptually standardize on:
 
 - `finance_drawer`
+- `field_station`
 - `studio_game`
 - `studio_web`
 - `studio_data`
 - `studio_docs`
 - `studio_image`
 - `studio_video`
+
+Implementation note, 2026-05-13: `field_station` is now a creatable workspace/surface with a managed face/control preview, capture/mission/job APIs, image capture asset storage, browser camera/upload controls, mode-native prompt packs, OpenAI Realtime voice through a local client-secret endpoint, browser/native speech fallbacks, face state changes, station event polling, a fake background worker, a Codex worker adapter, persisted markdown artifacts, a review drawer, follow-up job actions, a project library, read-only owner briefing adapters, and a station-event endpoint that simulates hardware button, camera, LED, and printer contracts. The next step is replacing the sample business sources with live read/search connectors and adding real station-device service adapters behind the same queue contract.
 
 Every studio should declare:
 

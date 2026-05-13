@@ -1797,6 +1797,8 @@ class ImageWorkflowStore:
         for child in sorted(assets_root.iterdir(), key=lambda item: item.name.lower()):
             if not child.is_file() or not _is_supported_image_file(child):
                 continue
+            if _is_managed_flat_asset_file_name(child.name):
+                continue
             relative_path = f"image-workflow/assets/{child.name}"
             if relative_path in known_paths:
                 continue
@@ -2946,6 +2948,10 @@ def _flat_asset_file_name(asset_id: str, original_name: str) -> str:
     if clean_name.startswith(prefix):
         return clean_name
     return f"{prefix}{clean_name}"
+
+
+def _is_managed_flat_asset_file_name(file_name: str) -> bool:
+    return re.match(r"^img_[0-9a-f]{12}__", Path(str(file_name)).name or "") is not None
 
 
 def _suffix_for_mime(mime_type: str) -> str:

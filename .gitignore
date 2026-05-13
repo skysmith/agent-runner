@@ -1,5 +1,8 @@
 .agent-runner/
 .agent-runner-web-*.log
+.env
+.env.*
+!.env.example
 .pytest_cache/
 .tmp-home/
 .venv/

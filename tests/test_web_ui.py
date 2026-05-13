@@ -118,6 +118,16 @@ def test_render_web_app_includes_native_image_studio_controls() -> None:
     assert "Video Results" not in html
 
 
+def test_render_web_app_includes_field_station_surface_entry_points() -> None:
+    html = render_web_app()
+
+    assert '<option value="field_station">Field Station</option>' in html
+    assert "{ value: 'magic-button', label: 'Magic Button Console' }" in html
+    assert "Capture messy real-world input and turn it into useful Alcove artifacts." in html
+    assert "New Field Station" in html
+    assert "Ready to Capture" in html
+
+
 def test_render_web_app_includes_video_studio_entry_points() -> None:
     html = render_web_app()
 
