@@ -34,6 +34,15 @@ Add dated notes here when Sky's eye changes. Newer entries supersede older guida
 - Do not split the same user intent into a decorative prompt and a separate input field. The invitation should label or become the actual composer where the user's messy thought lives.
 - For presence assistants, the basic surface should prefer one start/stop control for the live assistant loop. Background work should be launched through the assistant/tool bridge or advanced controls, not competing primary buttons.
 
+### 2026-06-15
+
+- Story Dock's iOS app is now the benchmark for consumer ritual surfaces in Sky's system. The lesson is interaction priority, not just visual warmth: one primary moment, management behind quiet secondary surfaces, and platform-native controls that make the product feel trustworthy.
+- For branded consumer apps that support a physical ritual, do not force the neutral dashboard palette if the project has a warmer product identity. Keep the app calm and native, but let brand texture appear in the launch mark, app icon, small status moments, and physical product surfaces.
+- The first screen should make the real object/action obvious. For Story Dock-like products, `tap/open -> record or play` beats a landing page, feature tour, account wall, or dashboard.
+- If an item already contains value, default to playback, readiness, or the next concrete action first. Put edit, replace, record-another, owner tools, support, and advanced routing behind an info sheet, menu, or Library tab.
+- Native mobile utilities should prefer platform patterns: tab navigation, navigation stacks, forms/lists, sheets, large touch targets, system icons, semantic badges, and short status copy. Custom visual language should wrap those patterns, not fight them.
+- Account/library surfaces can be operational, but keep them lighter than admin dashboards. Use compact metrics, segmented/tabbed information architecture, disclosure groups for tools, redacted support status, and destructive actions that explain the safe next step.
+
 ## core philosophy
 
 ### 1. calm before clever
